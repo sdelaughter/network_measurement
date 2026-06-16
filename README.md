@@ -21,6 +21,6 @@ Also includes a `plot.ipynb` notebook for computing and plotting various delays 
 Similar to traceroute, but with a few advantages:
   - More accurate per-hop latency measurements by sending pings with normal TTLs after initial probe packets
   - Pass-through of all command-line arguments supported by `ping`
-  - JSON formatted output
+  - JSON formatted output for easier analysis
 
 Also inscludes a `plot.ipynb` notebook for plotting measurements in various ways.

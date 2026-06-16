@@ -1,6 +1,9 @@
 # network_measurement
 Network Measurement Tools
 
+## Setup
+Run `setup_venv.sh` to create a python virtual environment with dependencies necessary for plotting in Jupyter notebooks.
+
 ## List of Tools
 
 ### hopping

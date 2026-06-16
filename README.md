@@ -6,9 +6,9 @@ Network Measurement Tools
 Provides various component measurements of directional latency between a client and server.  Output includes the following datapoints for each measurement:
   - Sequence number
   - Time request is scheduled by the client
-  - Time request is sent by the client (kernel software)
-  - Time request is sent by the client (kernel hardware transformed, if supported else same as above)
-  - Time request is sent by the client (kernel hardware raw, if supported else same as above)
+  - Time request is sent by the client (software)
+  - Time request is sent by the client (hardware transformed, if supported else same as above)
+  - Time request is sent by the client (hardware raw, if supported else same as above)
   - Time request is received by the server
   - Time request is processed by the server
   - Time reply is sent by the server

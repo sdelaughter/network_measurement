@@ -7,11 +7,12 @@
 # sequence:             Sequence number
 # client_schedule:      Time request is scheduled by the client
 # client_send:          Time request is sent by the client kernel (software)
-# client_send_hw:       Time request is sent by the client kernel (hardware_transformed), or =client_send if unsupported
-# client_send_hw_raw:   Time request is sent by the client kernel (hardware_raw), or =client_send_hw if unsupported
-# server_recv:          Time request is received by the server's kernel
+# client_send_hw:       Time request is sent by the client kernel, or =client_send if unsupported
+# server_recv_hw:       Time request is received by the server kernel (hardware), or =server_recv if unsupported
+# server_recv:          Time request is received by the server kernel (software)
 # server_process:       Time request is processed by the server's program
-# reply_recv:           Time reply is received by the client's kernel
+# reply_recv_hw:        Time reply is received by the client kernel (hardware), or =reply_recv if unsupported
+# reply_recv:           Time reply is received by the client kernel (software)
 # reply_process:        Time reply is processed by the client's program
 
 # All timestamps are given in nanoseconds since the epoch
@@ -49,19 +50,22 @@ DEFAULT_TIMEOUT = 1
 DEFAULT_INTERVAL = 1
 DEFAULT_OUTFILE = None # If None, print to STDOUT
 DEFAULT_PADDING = 0
-USE_NEW_TIMESTAMPS = True # TODO: Determine based on system architecture
 
-# Packet size constants, to determine padding amounts
-STRUCT_FORMAT_REQUEST = "!IQQ"
-STRUCT_FORMAT_REPLY = "!IQQQQQ"
-DATA_SIZE_REQUEST = len(struct.pack(STRUCT_FORMAT_REQUEST, 0, 0, 0))        # 16 bytes
-DATA_SIZE_REPLY = len(struct.pack(STRUCT_FORMAT_REPLY, 0, 0, 0, 0, 0, 0))   # 44 bytes
+# Other configuration
+USE_NEW_TIMESTAMPS = True       # TODO: Determine based on system architecture
 AMPLIFICATION_PREVENTION = True # Pad request packets to the minimum size of reply packets (padding option is in addition to this)
+BUFF_SIZE = 1024                # TODO: compute actual space needed
+ANC_BUFF_SIZE = 1024            # TODO: calculate with CMSG_SPACE()
+RING_SIZE = 1024                # Max outstanding packets
+
+# Packet size constants
+BYTE_ORDER = "!" #Network order (big-endian)
+STRUCT_FORMAT_REQUEST = "IQQ"
+STRUCT_FORMAT_REPLY = "IQQQQQ"
+DATA_SIZE_REQUEST = len(struct.pack(BYTE_ORDER+STRUCT_FORMAT_REQUEST, *[0]*len(STRUCT_FORMAT_REQUEST)))    # 20 bytes
+DATA_SIZE_REPLY = len(struct.pack(BYTE_ORDER+STRUCT_FORMAT_REPLY, *[0]*len(STRUCT_FORMAT_REPLY)))          # 44 bytes
 
 # Socket constants
-BUFF_SIZE = 1024        # TODO: compute actual space needed
-ANC_BUFF_SIZE = 1024    # TODO: calculate with CMSG_SPACE()
-
 # From include/uapi/asm-generic/socket.h
 SO_TIMESTAMPNS_OLD = 35
 SO_TIMESTAMPNS_NEW = 64
@@ -69,7 +73,6 @@ SO_TIMESTAMPNS = SO_TIMESTAMPNS_NEW if USE_NEW_TIMESTAMPS else SO_TIMESTAMPNS_OL
 SO_TIMESTAMPING_OLD = 37
 SO_TIMESTAMPING_NEW = 65
 SO_TIMESTAMPING = SO_TIMESTAMPING_NEW if USE_NEW_TIMESTAMPS else SO_TIMESTAMPING_OLD
-
 # From include/uapi/linux/net_tstamp.h
 SOF_TIMESTAMPING_TX_HARDWARE    = (1<<0)
 SOF_TIMESTAMPING_TX_SOFTWARE    = (1<<1)
@@ -87,13 +90,13 @@ SOF_TIMESTAMPING_LAST = SOF_TIMESTAMPING_OPT_TSONLY
 SOF_TIMESTAMPING_MASK = (SOF_TIMESTAMPING_LAST - 1) | SOF_TIMESTAMPING_LAST
 
 # Ring buffer constants
-RING_SIZE = 1024 # Max outstanding packets
 RING_SLOT_SEQ = 0
 RING_SLOT_TS0 = 1 # ts[0] is the software timestamp
 RING_SLOT_TS1 = 2 # ts[1] is deprecated, implemented as a placeholder
 RING_SLOT_TS2 = 3 # ts[2] is the hardware timestamp
 RING_SLOTS = 4 # Number of values stored per packet
 
+# Header names and value order for writing output
 OUTPUT_ORDER = [
     "sequence",
     "client_schedule",
@@ -143,19 +146,21 @@ def ring_pop(ring, seq, size=RING_SIZE):
         return [ts0, ts1, ts2]
     return [None, None, None]
 
+# Simpler kernel time, if using SO_TIMESTAMPNS option
 def get_kernel_time(cdata):
-    sec, nsec = struct.unpack("qq", cdata)
+    sec, nsec = struct.unpack("2q", cdata)
     return sec * 1000000000 + nsec
 
+# More complex kernel time, if using SO_TIMESTAMPING option
 def get_kernel_timing(cdata):
     # data contains 3 timestamps:
     # software, hardware transformed (deprecated), raw hardware
     ts = struct.unpack("6q", cdata)
     sec1, nsec1, sec2, nsec2, sec3, nsec3 = ts
     ts0 = sec1*1000000000 + nsec1
-    # tx_ns1 = sec2*1000000000 + nsec2
-    # if tx_ns1 == 0:
-    #     tx_ns1 = tx_ns0
+    # ts1 = sec2*1000000000 + nsec2
+    # if ts1 == 0:
+    #     ts1 = ts0
     ts1 = -1 # ts[1] is deprecated, ignore it
     ts2 = sec3*1000000000 + nsec3
     if ts2 == 0:
@@ -204,9 +209,9 @@ class Server:
                     rx_ns0, _, rx_ns2 = get_kernel_timing(cdata)
 
             pad_bytes = len(data) - DATA_SIZE_REQUEST
-            i, port, tx_ns = struct.unpack(f"{STRUCT_FORMAT_REQUEST}{pad_bytes}x", data)
+            i, port, tx_ns = struct.unpack(f"{BYTE_ORDER}{STRUCT_FORMAT_REQUEST}{pad_bytes}x", data)
             reply_ns = time.time_ns()
-            reply_data = struct.pack(f"{STRUCT_FORMAT_REPLY}{self.padding}x", i, tx_ns, rx_ns0, rx_ns2, rx_ns, reply_ns)
+            reply_data = struct.pack(f"{BYTE_ORDER}{STRUCT_FORMAT_REPLY}{self.padding}x", i, tx_ns, rx_ns0, rx_ns2, rx_ns, reply_ns)
             self.sock_send.sendto(reply_data, (addr[0], port))
 
     def start(self):
@@ -305,7 +310,7 @@ class Client:
                     ts_now_kernel0, _, ts_now_kernel2 = get_kernel_timing(cdata)
 
             pad_bytes = len(data) - DATA_SIZE_REPLY
-            seq, ts_tx, ts_rx_kernel, ts_rx_kernel_hw, ts_rx, ts_reply = struct.unpack(f"{STRUCT_FORMAT_REPLY}{pad_bytes}x", data)
+            seq, ts_tx, ts_rx_kernel, ts_rx_kernel_hw, ts_rx, ts_reply = struct.unpack(f"{BYTE_ORDER}{STRUCT_FORMAT_REPLY}{pad_bytes}x", data)
             ts_tx_kernel, _, ts_tx_kernel_hw = ring_pop(self.ring_buffer, seq) # ts[1] is deprecated, ignore it
             if ts_tx_kernel is None:
                 ts_tx_kernel = ts_tx
@@ -343,7 +348,7 @@ class Client:
             pad_bytes = self.padding
             if AMPLIFICATION_PREVENTION:
                 pad_bytes += max(0, DATA_SIZE_REPLY - DATA_SIZE_REQUEST)
-            send_data = struct.pack(f"{STRUCT_FORMAT_REQUEST}{pad_bytes}x", i, self.client_port, tx_ns)
+            send_data = struct.pack(f"{BYTE_ORDER}{STRUCT_FORMAT_REQUEST}{pad_bytes}x", i, self.client_port, tx_ns)
             self.sock_send.sendto(send_data, (self.server_addr, self.server_port))
             
             data, ancdata, flags, addr = self.sock_send.recvmsg(

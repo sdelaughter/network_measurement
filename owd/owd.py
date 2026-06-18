@@ -10,10 +10,11 @@
 # client_send_hw:       Time request is sent by the client kernel, or =client_send if unsupported
 # server_recv_hw:       Time request is received by the server kernel (hardware), or =server_recv if unsupported
 # server_recv:          Time request is received by the server kernel (software)
-# server_process:       Time request is processed by the server's program
+# server_process:       Time request is processed by the server
+# server_rely:          Time reply is sent by the server
 # reply_recv_hw:        Time reply is received by the client kernel (hardware), or =reply_recv if unsupported
 # reply_recv:           Time reply is received by the client kernel (software)
-# reply_process:        Time reply is processed by the client's program
+# reply_process:        Time reply is processed by the client
 
 # All timestamps are given in nanoseconds since the epoch
 # The server_recv and server_process timestamps are based on the server's clock, while the rest are based on the client's clock

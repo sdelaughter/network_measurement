@@ -20,17 +20,17 @@
 # The server_recv and server_process timestamps are based on the server's clock, while the rest are based on the client's clock
 
 # ARGUMENTS
-# See the parse_args() function for all argument defintions, or run `python3 owd.py -h` to display full help info
+# See the parse_args() function for all argument defintions, or run `python3 kdelay.py -h` to display full help info
 # If running in server mode (with [-s/--server-mode]), any arguments other than [-A/--server-addr] and [-P/--server-port] will be ignored. 
 # If running in client mode (the default), be sure to specify both the client address with [-a/--client-addr] and the server addresses with [-A/--server-addr].
 # For the server to handle multiple simultaneous clients, each client must set a different client port with [-p/--client-port].
 
 # EXAMPLE
 # First start a server with:
-#   python3 owd.py -A 10.0.0.1 -P 10000 -s
+#   python3 kdelay.py -A 10.0.0.1 -P 10000 -s
 #
 # Then, start a client with:
-#   python3 owd.py -A 10.0.0.1 -P 10000 -a 10.0.0.2 -p 10001 -i 0.1 -c 5 -t 2 -x 64 -o owd.csv
+#   python3 kdelay.py -A 10.0.0.1 -P 10000 -a 10.0.0.2 -p 10001 -i 0.1 -c 5 -t 2 -x 64 -o kdelay.csv
 
 import argparse
 import ctypes

@@ -5,19 +5,12 @@
 # OUTPUT
 # Each line of output contains the following values
 # sequence:             Sequence number
-# client_schedule:      Time request is scheduled by the client
-# client_send:          Time request is sent by the client kernel (software)
-# client_send_hw:       Time request is sent by the client kernel, or =client_send if unsupported
-# server_recv_hw:       Time request is received by the server kernel (hardware), or =server_recv if unsupported
-# server_recv:          Time request is received by the server kernel (software)
-# server_process:       Time request is processed by the server
-# server_rely:          Time reply is sent by the server
-# reply_recv_hw:        Time reply is received by the client kernel (hardware), or =reply_recv if unsupported
-# reply_recv:           Time reply is received by the client kernel (software)
-# reply_process:        Time reply is processed by the client
+# ts:                   Time request is sent by the client (nanoseconds since epoch)
+# rtt:                  Round Trip Time (ms)
+# send:                 Outgoing one-way-delay (ms)
+# recv:                 Incoming one-way-delay (ms)
 
-# All timestamps are given in nanoseconds since the epoch
-# The server_recv and server_process timestamps are based on the server's clock, while the rest are based on the client's clock
+# Note that one-way-delay metrics assume clock synchronization between client and server
 
 # ARGUMENTS
 # See the parse_args() function for all argument defintions, or run `python3 owd.py -h` to display full help info
@@ -27,13 +20,12 @@
 
 # EXAMPLE
 # First start a server with:
-#   python3 owd.py -A 10.0.0.1 -P 10000 -s
+#   python3 udping.py -A 10.0.0.1 -P 10000 -s
 #
 # Then, start a client with:
-#   python3 owd.py -A 10.0.0.1 -P 10000 -a 10.0.0.2 -p 10001 -i 0.1 -c 5 -t 2 -x 64 -o owd.csv
+#   python3 udping.py -A 10.0.0.1 -P 10000 -a 10.0.0.2 -p 10001 -i 0.1 -c 5 -t 2 -x 64 -o owd.csv
 
 import argparse
-import ctypes
 import signal
 import socket
 import struct

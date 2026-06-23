@@ -15,9 +15,9 @@ Similar to traceroute, but with a few advantages:
 Also inscludes a `plot.ipynb` notebook for plotting measurements in various ways.
 
 ### kdelay
-A simplified version of the [TWAMP](https://datatracker.ietf.org/doc/html/rfc5357) protocol.
+Provides various component measurements of directional latency between a client and server over UDP.  Includes kernel timestamps to distinguish time spent in queues and on the network.  Supports hardware timestamps where possible.
 
-Provides various component measurements of directional latency between a client and server, including kernel timestamps to measure time spent in queues and on the network.  Supports hardware timestamps where possible.
+Similar to the [TWAMP](https://datatracker.ietf.org/doc/html/rfc5357) protocol, but provides no authentication or encryption.
 
 Also includes a `plot.ipynb` notebook for computing and plotting various delays from the data.
 

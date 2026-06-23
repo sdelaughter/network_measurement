@@ -20,3 +20,9 @@ A simplified version of the [TWAMP](https://datatracker.ietf.org/doc/html/rfc535
 Provides various component measurements of directional latency between a client and server, including time spent in queues and on the network.  Supports hardware timestamps where possible.
 
 Also includes a `plot.ipynb` notebook for computing and plotting various delays from the data.
+
+### udping
+A simpler version of `owd`, without kernel timestamps. Outputs the following per measurement:
+`sequence, timestamp, rtt, send_delay, recv_delay`
+
+Also includes a `plot.ipynb` notebook for plotting RTT and one-way delays

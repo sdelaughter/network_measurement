@@ -119,11 +119,15 @@ def parse_args():
     parser.add_argument("-A", "--server-addr",  dest="server_addr", default=DEFAULT_SERVER_ADDR,    type=str,       help="Server Address")
     parser.add_argument("-p", "--client-port",  dest="client_port", default=DEFAULT_CLIENT_PORT,    type=int,       help="Client Port")
     parser.add_argument("-P", "--server-port",  dest="server_port", default=DEFAULT_SERVER_PORT,    type=int,       help="Server Port")
-    parser.add_argument("-i", "--interval",     dest="interval",    default=DEFAULT_INTERVAL,       type=float,     help="Seconds between sending packets")
     parser.add_argument("-c", "--count",        dest="count",       default=DEFAULT_COUNT,          type=int,       help="Number of packets to send")
     parser.add_argument("-t", "--timeout",      dest="timeout",     default=DEFAULT_TIMEOUT,        type=float,     help="Seconds to wait after last packet sent")
     parser.add_argument("-o", "--outfile",      dest="outfile",     default=DEFAULT_OUTFILE,        type=str,       help="Output filepath.  Print to STDOUT if None")
     parser.add_argument("-x", "--padding",      dest="padding",     default=DEFAULT_PADDING,        type=int,       help="Padding bytes added")
+
+    speed_group = parser.add_mutually_exclusive_group()
+    speed_group.add_argument("-i", "--interval",    dest="interval",    default=DEFAULT_INTERVAL,       type=float,     help="Seconds between sending packets")
+    speed_group.add_argument("-r", "--rate",        dest="rate",        default=None,                   type=float,     help="Packets to send per second")
+    
     args = parser.parse_args()
     return args
 
@@ -365,7 +369,10 @@ class Client:
 
     def start(self, count=DEFAULT_COUNT, interval=DEFAULT_INTERVAL):
         if not self.outfile is None:
-            self.file_object = open(self.outfile, "a")
+            # Open in append mode but overwrite any old contents
+            self.file_object = open(self.outfile, "a+")
+            self.file_object.seek(0)
+            self.file_object.truncate()
         self.stop_event_send = Event()
         self.stop_event_recv = Event()
         self.ring_buffer = ring_create()
@@ -420,7 +427,11 @@ if __name__ == '__main__':
             args.outfile,
             args.padding
         )
+        if args.rate != None:
+            interval = 1.0/args.rate
+        else:
+            interval = args.interval
         client.start(
             args.count,
-            args.interval
+            interval
         )

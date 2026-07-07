@@ -1,9 +1,14 @@
-/*pping
-Send pings with a poisson distribution delay interval
-Positional arguments are:
-    - Target IP address
-    - Average expected packets/second
-    - Total duration in seconds
+/* pping (Poisson Ping)
+Author: Sam DeLaughter
+
+Send ICMP Echo Requests at a rate that follows a Poisson distribution.
+Prints output that (mostly) matches that of the traditional ping command, plus some extra statistics.
+Also supports JSON-formatted output (without summary statistics).
+
+For usage information, try `pping -h` or read the `help_string` below.
+
+Compile with:
+gcc -O2 -Wall -o pping pping.c -lm
 */
 
 #include <stdio.h>
@@ -15,6 +20,7 @@ Positional arguments are:
 #include <time.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <signal.h>
 
 #include <sys/socket.h>
 #include <sys/time.h>
@@ -23,34 +29,60 @@ Positional arguments are:
 #include <netinet/ip_icmp.h>
 #include <arpa/inet.h>
 
+#define SEQ_TABLE_SIZE  65536   // Max number of sequence/timestamp mappings to store before wrapping
+#define DRY_RUN 0               // Print argument values and exit, for debugging purposes
 
-#define PACKET_SIZE   64
-#define SEQ_TABLE_SIZE  65536
-#define POST_SLEEP 1
-#define QUIET 0
+// Define help string
+const char* help_string = "\n\
+Usage\n\
+    pping [options] <destination>\n\
+\n\
+Options:\n\
+    <destination>       Destination IP address\n\
+    -c                  Number of packets to send, unless duration is reached first. Default: unlimited.\n\
+    -i                  Average interval in seconds between packets. Mutually exclusive with -r. Default: 1.\n\
+    -j                  Enable JSON-formatted output.\n\
+    -q                  Enable quiet mode, torint only summary statistics with no per-packet output.\n\
+    -r                  Average number of packets per second.  Mutually exclusive with -i. Default: 1.\n\
+    -s                  Size of ICMP payload to send.  Additional 8-byte ICMP header will be added. Default: 56.\n\
+    -w                  Duration in seconds to send for, unless count is reached first.  Default: unlimited.\n\
+    -W                  Time in seconds to wait for replies after last packet is sent.  Default: 1.\n\
+";
 
+// Set default values for command-line arguments
+static char*    target_ip   = "127.0.0.1";
+static int      quiet       = 0;
+static int      packet_size = 64;
+static double   lambda      = 1.0;
+static int      count       = -1;
+static double   duration    = -1.0;
+static double   timeout     = 1.0;
+static int      json        = 0;
+
+// Initialize other static variables
 static int sock;
 static pid_t pid;
 static struct timespec start_ts;
-
 static double sent_time[SEQ_TABLE_SIZE];
 static pthread_mutex_t sent_mutex = PTHREAD_MUTEX_INITIALIZER;
-
 static atomic_int sent_count = 0;
 static atomic_int recv_count = 0;
 static double rtt_min = -1.0, rtt_max = -1.0, rtt_sum = 0.0;
 static double int_min = -1.0, int_max = -1.0, int_sum = 0.0;
-// static pthread_mutex_t stats_mutex = PTHREAD_MUTEX_INITIALIZER;
-
+static atomic_bool stop_sender = 0;
 static atomic_bool stop_receiver = 0;
 
-
+// Helpers for time conversion
 static inline double timespec_to_msec(const struct timespec *ts) {
     return ts->tv_sec * 1000 + ts->tv_nsec / 1000000;
 }
-
 static inline double timespec_to_nsec(const struct timespec *ts) {
     return ts->tv_sec * 1e9 + ts->tv_nsec;
+}
+
+// Catch ctrl-C signal and stop the sender
+void interrupt_handler(int i) {
+    atomic_store(&stop_sender, 1);
 }
 
 // The standard function for calculating Internet checksums
@@ -77,6 +109,7 @@ unsigned short checksum(unsigned short* ptr, int nbytes) {
 	return(answer);
 }
 
+// Determine a random amount of time to wait based on a given lambda
 static struct timespec poisson_delay(double lambda) {
     double u;
     do {
@@ -90,27 +123,25 @@ static struct timespec poisson_delay(double lambda) {
     return ts;
 }
 
+// Compute the amount of time elapsed since the program started
 static double now_elapsed(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (ts.tv_sec - start_ts.tv_sec) + (ts.tv_nsec - start_ts.tv_nsec) / 1e9;
 }
 
+// Listen for echo reply packets
 static void* receiver_thread(void* arg) {
     (void)arg;
     char buf[1024];
+    struct sockaddr_in from;
+    socklen_t fromlen = sizeof(from);
 
     while (!atomic_load(&stop_receiver)) {
-        struct sockaddr_in from;
-        socklen_t fromlen = sizeof(from);
-
         ssize_t n = recvfrom(sock, buf, sizeof(buf), 0,
                               (struct sockaddr*)&from, &fromlen);
         if (n < 0) {
-            if (errno == EINTR)
-                continue;
-            if (errno == EWOULDBLOCK || errno == EAGAIN)
-                continue; // timeout, check stop flag and loop
+            if (errno == EINTR || errno == EWOULDBLOCK || errno == EAGAIN) continue;
             perror("recvfrom");
             continue;
         }
@@ -136,62 +167,145 @@ static void* receiver_thread(void* arg) {
         // Ignore packets from other PIDs
         if (id != (pid & 0xFFFF)) continue;
 
+        // Retrieve the sending timestamp for this sequence number
         pthread_mutex_lock(&sent_mutex);
         double st = sent_time[seq % SEQ_TABLE_SIZE];
         sent_time[seq % SEQ_TABLE_SIZE] = -1; // Reset value to -1 after reading in case the sequence number wraps
         pthread_mutex_unlock(&sent_mutex);
-
-        char from_str[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, &from.sin_addr, from_str, sizeof(from_str));
-
-        int ttl = ip_hdr->ttl;
-
         if (st < 0.0) continue; // No matching send timestamp found
 
-        double rtt_ms = (recv_time - st) * 1000.0;
+        // Get the source address and TTL from the reply
+        char from_str[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &from.sin_addr, from_str, sizeof(from_str));
+        int ttl = ip_hdr->ttl;
 
+        // Compute the RTT and update statistics
+        double rtt_ms = (recv_time - st) * 1000.0;
         atomic_fetch_add(&recv_count, 1);
-        // pthread_mutex_lock(&stats_mutex);
         if (rtt_min < 0.0 || rtt_ms < rtt_min) rtt_min = rtt_ms;
         if (rtt_max < 0.0 || rtt_ms > rtt_max) rtt_max = rtt_ms;
         rtt_sum += rtt_ms;
-        // pthread_mutex_unlock(&stats_mutex);
 
-        if (!QUIET) {
-            printf("[%ld.%06ld] %lu bytes from %s: icmp_seq=%u ttl=%u time=%.3f ms\n",
-                    (long)now.tv_sec, now.tv_nsec / 1000L, n-ip_hdr_len, from_str, seq, ttl, rtt_ms);
+        // Print per-packet output
+        if (!quiet) {
+            if (json) {
+                if (seq > 1) printf(",\n");
+                printf("\
+    {\n\
+        \"timestamp\": %ld.%06ld,\n\
+        \"bytes\": %lu,\n\
+        \"from\": \"%s\",\n\
+        \"icmp_seq\": %u,\n\
+        \"ttl\": %u,\n\
+        \"rtt\": %.3f\n\
+    }", (long)now.tv_sec, now.tv_nsec / 1000L, n-ip_hdr_len, from_str, seq, ttl, rtt_ms);
+            } else {
+                printf("[%ld.%06ld] %lu bytes from %s: icmp_seq=%u ttl=%u time=%.3f ms\n",
+                        (long)now.tv_sec, now.tv_nsec / 1000L, n-ip_hdr_len, from_str, seq, ttl, rtt_ms);
+            }
         }
     }
-
     return NULL;
 }
 
 int main(int argc, char* argv[]) {
-    if (argc != 4) {
-        fprintf(stderr, "Usage: %s <target_ip> <mean_rate_pkts_per_sec> <count>\n", argv[0]);
-        fprintf(stderr, "Example: %s 8.8.8.8 5.0 20\n", argv[0]);
+    srand(time(NULL));
+    pid = getpid();
+
+    // Prepare to handle interrupts
+    struct sigaction act;
+    bzero(&act, sizeof(act));
+    act.sa_handler = &interrupt_handler;
+    sigaction(SIGINT, &act, NULL);
+    
+    // Parse command-line arguments
+    int got_interval_arg = 0;
+    int got_rate_arg = 0;
+    int got_quiet_arg = 0;
+    int got_json_arg = 0;
+    int opt;
+    while ((opt = getopt(argc, argv, "c:hi:jqr:s:w:W:")) != -1) {
+        switch (opt) {
+            case 'c':
+                count = atoi(optarg);
+                break;
+            case 'i':
+                lambda = 1.0/atof(optarg);
+                got_interval_arg = 1;
+                break;
+            case 'j':
+                json = 1;
+                got_json_arg = 1;
+                break;
+            case 'q':
+                quiet = 1;
+                got_quiet_arg = 1;
+                break;
+            case 'r':
+                lambda = atof(optarg);
+                got_rate_arg = 1;
+                break;
+            case 's':
+                packet_size = atoi(optarg) + 8; // 8 byte ICMP header
+                break;
+            case 'w':
+                duration = atof(optarg);
+                break;
+            case 'W':
+                timeout = atof(optarg);
+                break;
+            case 'h':
+            default:
+                printf("%s", help_string);
+                return 1;
+        }
+    }
+    if (optind < argc) target_ip = argv[optind];
+
+    // Make sure we don't have both -i and -r arguments
+    if (got_interval_arg && got_rate_arg) {
+        fprintf(stderr, "The -i (interval) and -r (rate) arguments are mutually exclusive.  You must use one or the other, not both.\n");
         return 1;
     }
 
-    // Parse arguments
-    const char* target_ip = argv[1];    // target IP address
-    double lambda = atof(argv[2]);      // mean packets per second
-    double duration = atof(argv[3]);    // duration in seconds
+    // Make sure we don't have both -j and -q arguments
+    if (got_json_arg && got_quiet_arg) {
+        fprintf(stderr, "The -j (json) and -q (quiet) arguments are mutually exclusive.  You must use one or the other, not both.\n");
+        return 1;
+    }
 
+    // Make sure the target sending rate is positive
     if (lambda <= 0.0) {
-        fprintf(stderr, "Rate must be positive\n");
+        if (got_interval_arg) fprintf(stderr, "Interval must be positive\n");
+        else fprintf(stderr, "Rate must be positive\n");
         return 1;
     }
+    
+    #if DRY_RUN
+        // Display arguments and exit, for debugging purposes
+        printf("Arguments are:\n\
+            Target IP: %s\n\
+            Count: %d\n\
+            Quiet: %u\n\
+            Lambda: %f\n\
+            Size: %u\n\
+            Duration: %f\n\
+            Timeout: %f\n",
+            target_ip, count, quiet, lambda, packet_size, duration, timeout
+        );
+        return 0;
+    #endif
 
+    // Create a socket
     sock = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
     if (sock < 0) {
-        perror("Failed to create socket, do you have root priviliges?");
-		exit(1);
+        fprintf(stderr, "Failed to create socket, do you have root priviliges?\n");
+		return 1;
     }
-
     struct timeval tv = { .tv_sec = 0, .tv_usec = 200000 }; // 200 ms
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
+    // Make sure the destination is a valid IPv4 address
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
@@ -201,13 +315,11 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    srand(time(NULL));
-
-    pid = getpid();
-
+    // Initialize array to store timestamps
     for (int i = 0; i < SEQ_TABLE_SIZE; i++)
         sent_time[i] = -1.0;
 
+    // Start receiver thread to listen for Echo Reply packets
     pthread_t recv_tid;
     if (pthread_create(&recv_tid, NULL, receiver_thread, NULL) != 0) {
         perror("pthread_create");
@@ -215,8 +327,8 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    char packet[PACKET_SIZE];
-
+    // Create ICMP packet
+    char packet[packet_size];
     memset(packet, 0, sizeof(packet));
     struct icmphdr* icmph = (struct icmphdr*)packet;
     icmph->type = 8;
@@ -230,7 +342,11 @@ int main(int argc, char* argv[]) {
     double elapsed = 0.0;
     double send_ts;
     int seq = 1;
-    while (elapsed < duration) {
+
+    // Start sending packets
+    if (json) printf("[\n");
+    else printf("PPING %s (%s) %u(%u) bytes of data.\n", target_ip, target_ip, packet_size-8, packet_size+20);
+    while ((elapsed < duration || duration < 0) && (seq <= count || count < 0) && !atomic_load(&stop_sender)) {
         icmph->un.echo.sequence = htons((unsigned short)seq);
         icmph->checksum = 0;
         icmph->checksum = checksum((unsigned short*)packet, sizeof(packet));
@@ -257,32 +373,35 @@ int main(int argc, char* argv[]) {
         elapsed = now_elapsed();
     }
 
-    sleep(POST_SLEEP);
-
+    // Wait for replies to arrive before stopping receiver
+    sleep(timeout);
     atomic_store(&stop_receiver, 1);
     pthread_join(recv_tid, NULL);
 
-    int n_sent = atomic_load(&sent_count);
-    int n_recv = atomic_load(&recv_count);
-    double loss_pct = 0.0;
-    if (n_sent > 0) {
-        loss_pct = ((n_sent - n_recv) / n_sent) * 100.0;
+    // Compute and print summary statistics
+    if (json) {
+        printf("\n]\n");
+    } else {
+        int n_sent = atomic_load(&sent_count);
+        int n_recv = atomic_load(&recv_count);
+        double loss_pct = 0.0;
+        if (n_sent > 0) {
+            loss_pct = ((n_sent - n_recv) / n_sent) * 100.0;
+        }
+        printf("\n--- %s pping statistics ---\n", target_ip);
+        double total_duration = (now_elapsed()-timeout);
+        printf("%d packets transmitted, %d received, %.1f%% packet loss, time %ums\n", n_sent, n_recv, loss_pct, (int)(total_duration*1000.0));
+        if (n_recv > 0) {
+            printf("rtt min/avg/max = %.3f/%.3f/%.3f ms\n",
+                rtt_min, rtt_sum / n_recv, rtt_max);
+            printf("interval min/avg/max = %.3f/%.3f/%.3f ms\n",
+                int_min, int_sum / n_recv, int_max);
+            printf("pps avg = %.3f\n",
+                n_recv / total_duration);
+        }
     }
 
-    printf("\n--- %s pping statistics ---\n", target_ip);
-
-    double total_duration = now_elapsed() * 1000;
-
-    printf("%d packets transmitted, %d received, %.1f%% packet loss, time %ums\n", n_sent, n_recv, loss_pct, (int)total_duration);
-    if (n_recv > 0) {
-        printf("rtt min/avg/max = %.3f/%.3f/%.3f ms\n",
-            rtt_min, rtt_sum / n_recv, rtt_max);
-        printf("interval min/avg/max = %.3f/%.3f/%.3f ms\n",
-            int_min, int_sum / n_recv, int_max);
-        printf("pps avg = %.3f\n",
-            n_recv / duration);
-    }
-
+    // Close the socket and exit
     close(sock);
     return 0;
 }

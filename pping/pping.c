@@ -41,6 +41,7 @@ Options:\n\
     <destination>       Destination IP address\n\
     -c                  Number of packets to send, unless duration is reached first. Default: unlimited.\n\
     -i                  Average interval in seconds between packets. Mutually exclusive with -r. Default: 1.\n\
+    -I                  Specify the name of a network interface to bind to.\n\
     -j                  Enable JSON-formatted output.\n\
     -q                  Enable quiet mode, torint only summary statistics with no per-packet output.\n\
     -r                  Average number of packets per second.  Mutually exclusive with -i. Default: 1.\n\
@@ -51,6 +52,7 @@ Options:\n\
 
 // Set default values for command-line arguments
 static char*    target_ip   = "127.0.0.1";
+static char*    bind_ifname = NULL;
 static int      quiet       = 0;
 static int      packet_size = 64;
 static double   lambda      = 1.0;
@@ -224,7 +226,7 @@ int main(int argc, char* argv[]) {
     int got_quiet_arg = 0;
     int got_json_arg = 0;
     int opt;
-    while ((opt = getopt(argc, argv, "c:hi:jqr:s:w:W:")) != -1) {
+    while ((opt = getopt(argc, argv, "c:hi:I:jqr:s:w:W:")) != -1) {
         switch (opt) {
             case 'c':
                 count = atoi(optarg);
@@ -232,6 +234,9 @@ int main(int argc, char* argv[]) {
             case 'i':
                 lambda = 1.0/atof(optarg);
                 got_interval_arg = 1;
+                break;
+            case 'I':
+                bind_ifname = optarg;
                 break;
             case 'j':
                 json = 1;
@@ -302,8 +307,22 @@ int main(int argc, char* argv[]) {
         fprintf(stderr, "Failed to create socket, do you have root priviliges?\n");
 		return 1;
     }
-    struct timeval tv = { .tv_sec = 0, .tv_usec = 200000 }; // 200 ms
+    // int timeout_usec = timeout * 1000000;
+    // int timeout_sec = floor(timeout_usec / 1000000);
+    // timeout_usec = timeout_usec - (timeout_sec * 1000000);
+    int timeout_sec = 0;
+    int timeout_usec = 200000; // 200ms
+    struct timeval tv = { .tv_sec = timeout_sec, .tv_usec = timeout_usec };
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+    if (bind_ifname != NULL) {
+        if (setsockopt(sock, SOL_SOCKET, SO_BINDTODEVICE, bind_ifname, strlen(bind_ifname) + 1) < 0) {
+            perror("setsockopt(SO_BINDTODEVICE) (are you root? does the interface exist?)");
+            close(sock);
+            return 1;
+        }
+        printf("Bound to interface %s\n", bind_ifname);
+    }
 
     // Make sure the destination is a valid IPv4 address
     struct sockaddr_in addr;
@@ -361,16 +380,19 @@ int main(int argc, char* argv[]) {
         if (sent < 0) perror("sendto");
         else atomic_fetch_add(&sent_count, 1);
 
-        struct timespec ts = poisson_delay(lambda);
-        nanosleep(&ts, NULL);
-
-        double int_ms = timespec_to_msec(&ts);
-        if (int_min < 0.0 || int_ms < int_min) int_min = int_ms;
-        if (int_max < 0.0 || int_ms > int_max) int_max = int_ms;
-        int_sum += int_ms;
-
         seq += 1;
-        elapsed = now_elapsed();
+        if ((seq <= count || count < 0) && !atomic_load(&stop_sender)) {
+            struct timespec ts = poisson_delay(lambda);
+            nanosleep(&ts, NULL);
+            elapsed = now_elapsed();
+
+            if (elapsed < duration || duration < 0) {
+                double int_ms = timespec_to_msec(&ts);
+                if (int_min < 0.0 || int_ms < int_min) int_min = int_ms;
+                if (int_max < 0.0 || int_ms > int_max) int_max = int_ms;
+                int_sum += int_ms;
+            }
+        }
     }
 
     // Wait for replies to arrive before stopping receiver
@@ -394,10 +416,15 @@ int main(int argc, char* argv[]) {
         if (n_recv > 0) {
             printf("rtt min/avg/max = %.3f/%.3f/%.3f ms\n",
                 rtt_min, rtt_sum / n_recv, rtt_max);
+        }
+        if (n_sent > 1) {
             printf("interval min/avg/max = %.3f/%.3f/%.3f ms\n",
-                int_min, int_sum / n_recv, int_max);
+                int_min, int_sum / n_sent, int_max);
             printf("pps avg = %.3f\n",
-                n_recv / total_duration);
+                n_sent / total_duration);
+        } else {
+            printf("interval min/avg/max = -1/-1/-1 ms\n");
+            printf("pps avg = -1\n"); 
         }
     }
 

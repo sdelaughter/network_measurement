@@ -5,10 +5,10 @@ Network Measurement Tools
 Run `setup_venv.sh` to create a python virtual environment with dependencies necessary for plotting in Jupyter notebooks.
 
 ## List of Tools
-- [hopping](#hopping)
-- [kdelay](#kdelay)
-- [pping](#pping)
-- [udping](#udping)
+- [hopping (Hop-by-hop Ping)](#hopping)
+- [kdelay (Kernel Component Delay)](#kdelay)
+- [pping (Poisson Ping)](#pping)
+- [udping (UDP Ping)](#udping)
 
 ### hopping
 Similar to `traceroute`, but with a few advantages:

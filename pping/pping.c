@@ -320,12 +320,12 @@ int main(int argc, char* argv[]) {
         fprintf(stderr, "Failed to create socket, do you have root priviliges?\n");
 		exit(1);
     }
-    // int timeout_usec = timeout * 1000000;
-    // int timeout_sec = floor(timeout_usec / 1000000);
-    // timeout_usec = timeout_usec - (timeout_sec * 1000000);
+    int timeout_usec = timeout * 1000000;
+    int timeout_sec = floor(timeout_usec / 1000000);
+    timeout_usec = timeout_usec % 1000000;
     struct timeval tv;
-    tv.tv_sec = 0;
-    tv.tv_usec = 200000; // 200ms timeout on receive socket
+    tv.tv_sec = timeout_sec;
+    tv.tv_usec = timeout_usec;
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
     if (bind_ifname != NULL) {

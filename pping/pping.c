@@ -322,6 +322,7 @@ int main(int argc, char* argv[]) {
         fprintf(stderr, "Failed to create socket, do you have root priviliges?\n");
 		exit(1);
     }
+
     int timeout_usec = timeout * 1000000;
     int timeout_sec = floor(timeout_usec / 1000000);
     timeout_usec = timeout_usec % 1000000;
@@ -332,7 +333,7 @@ int main(int argc, char* argv[]) {
 
     if (bind_ifname != NULL) {
         if (setsockopt(sock, SOL_SOCKET, SO_BINDTODEVICE, bind_ifname, strlen(bind_ifname) + 1) < 0) {
-            perror("Failed to bind to device with name %s.  Make sure the interface exists and you have root priviliges.");
+            fprintf(stderr, "Failed to bind to device with name '%s'.  Make sure the interface exists and you have root priviliges.\n", bind_ifname);
             close(sock);
             exit(1);
         }

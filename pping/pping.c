@@ -136,7 +136,6 @@ static double now_elapsed(void) {
 // Parse command-line arguments
 void parse_args(int argc, char* argv[]) {
     int got_interval_arg = 0, got_rate_arg = 0;
-    int got_json_arg = 0, got_quiet_arg = 0;
     int opt;
     while ((opt = getopt(argc, argv, "c:hi:I:jqr:s:w:W:")) != -1) {
         switch (opt) {
@@ -152,11 +151,9 @@ void parse_args(int argc, char* argv[]) {
                 break;
             case 'j':
                 json = 1;
-                got_json_arg = 1;
                 break;
             case 'q':
                 quiet = 1;
-                got_quiet_arg = 1;
                 break;
             case 'r':
                 lambda = atof(optarg);
@@ -188,7 +185,7 @@ void parse_args(int argc, char* argv[]) {
     }
 
     // Make sure we don't have both -j and -q arguments
-    if (got_json_arg && got_quiet_arg) {
+    if (json && quiet) {
         fprintf(stderr, "The -j (json) and -q (quiet) arguments are mutually exclusive.  You must use one or the other, not both.\n");
         exit(1);
     }

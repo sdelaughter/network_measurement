@@ -317,11 +317,10 @@ int main(int argc, char* argv[]) {
 
     if (bind_ifname != NULL) {
         if (setsockopt(sock, SOL_SOCKET, SO_BINDTODEVICE, bind_ifname, strlen(bind_ifname) + 1) < 0) {
-            perror("setsockopt(SO_BINDTODEVICE) (are you root? does the interface exist?)");
+            perror("Failed to bind to device with name %s.  Make sure the interface exists and you have root priviliges.");
             close(sock);
             return 1;
         }
-        printf("Bound to interface %s\n", bind_ifname);
     }
 
     // Make sure the destination is a valid IPv4 address
@@ -423,6 +422,7 @@ int main(int argc, char* argv[]) {
             printf("pps avg = %.3f\n",
                 n_sent / total_duration);
         } else {
+            // Statistics about inter-packet intervals only make sense with >1 packets
             printf("interval min/avg/max = -1/-1/-1 ms\n");
             printf("pps avg = -1\n"); 
         }

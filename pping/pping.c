@@ -133,90 +133,10 @@ static double now_elapsed(void) {
     return (ts.tv_sec - start_ts.tv_sec) + (ts.tv_nsec - start_ts.tv_nsec) / 1e9;
 }
 
-// Listen for echo reply packets
-static void* receiver_thread(void* arg) {
-    (void)arg;
-    char buf[1024];
-    struct sockaddr_in from;
-    socklen_t fromlen = sizeof(from);
-
-    while (!atomic_load(&stop_receiver)) {
-        ssize_t n = recvfrom(sock, buf, sizeof(buf), 0,
-                              (struct sockaddr*)&from, &fromlen);
-        if (n < 0) {
-            if (errno == EINTR || errno == EWOULDBLOCK || errno == EAGAIN) continue;
-            perror("recvfrom");
-            continue;
-        }
-
-        double recv_time = now_elapsed();
-        struct timespec now;
-        clock_gettime(CLOCK_REALTIME, &now);
-
-        // Make sure the packet is long enough, and get header pointers
-        if ((size_t)n < sizeof(struct iphdr) + sizeof(struct icmphdr)) continue;
-        struct iphdr* ip_hdr = (struct iphdr* )buf;
-        int ip_hdr_len = ip_hdr->ihl * 4;
-        if ((size_t)n < (size_t)ip_hdr_len + sizeof(struct icmphdr)) continue;
-        struct icmphdr* icmp_hdr = (struct icmphdr*)(buf + ip_hdr_len);
-
-        // Ignore anything other than an echo reply
-        if (icmp_hdr->type != 0) continue;
-        if (icmp_hdr->code != 0) continue;
-
-        unsigned short id  = ntohs(icmp_hdr->un.echo.id);
-        unsigned short seq = ntohs(icmp_hdr->un.echo.sequence);
-
-        // Ignore packets from other PIDs
-        if (id != (pid & 0xFFFF)) continue;
-
-        // Retrieve the sending timestamp for this sequence number
-        pthread_mutex_lock(&sent_mutex);
-        double st = sent_time[seq % SEQ_TABLE_SIZE];
-        sent_time[seq % SEQ_TABLE_SIZE] = -1; // Reset value to -1 after reading in case the sequence number wraps
-        pthread_mutex_unlock(&sent_mutex);
-        if (st < 0.0) continue; // No matching send timestamp found
-
-        // Get the source address and TTL from the reply
-        char from_str[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, &from.sin_addr, from_str, sizeof(from_str));
-        int ttl = ip_hdr->ttl;
-
-        // Compute the RTT and update statistics
-        double rtt_ms = (recv_time - st) * 1000.0;
-        atomic_fetch_add(&recv_count, 1);
-        if (rtt_min < 0.0 || rtt_ms < rtt_min) rtt_min = rtt_ms;
-        if (rtt_max < 0.0 || rtt_ms > rtt_max) rtt_max = rtt_ms;
-        rtt_sum += rtt_ms;
-
-        // Print per-packet output
-        if (!quiet) {
-            if (json) {
-                if (seq > 1) printf(",\n");
-                printf("\
-    {\n\
-        \"timestamp\": %ld.%06ld,\n\
-        \"bytes\": %lu,\n\
-        \"from\": \"%s\",\n\
-        \"icmp_seq\": %u,\n\
-        \"ttl\": %u,\n\
-        \"rtt\": %.3f\n\
-    }", (long)now.tv_sec, now.tv_nsec / 1000L, n-ip_hdr_len, from_str, seq, ttl, rtt_ms);
-            } else {
-                printf("[%ld.%06ld] %lu bytes from %s: icmp_seq=%u ttl=%u time=%.3f ms\n",
-                        (long)now.tv_sec, now.tv_nsec / 1000L, n-ip_hdr_len, from_str, seq, ttl, rtt_ms);
-            }
-        }
-    }
-    return NULL;
-}
-
+// Parse command-line arguments
 void parse_args(int argc, char* argv[]) {
-    // Parse command-line arguments
-    int got_interval_arg = 0;
-    int got_rate_arg = 0;
-    int got_quiet_arg = 0;
-    int got_json_arg = 0;
+    int got_interval_arg = 0, got_rate_arg = 0;
+    int got_json_arg = 0, got_quiet_arg = 0;
     int opt;
     while ((opt = getopt(argc, argv, "c:hi:I:jqr:s:w:W:")) != -1) {
         switch (opt) {
@@ -304,6 +224,84 @@ void parse_args(int argc, char* argv[]) {
         );
         exit(0);
     #endif
+}
+
+// Listen for echo reply packets
+static void* receiver_thread(void* arg) {
+    (void)arg;
+    char buf[1024];
+    struct sockaddr_in from;
+    socklen_t fromlen = sizeof(from);
+
+    while (!atomic_load(&stop_receiver)) {
+        ssize_t n = recvfrom(sock, buf, sizeof(buf), 0,
+                              (struct sockaddr*)&from, &fromlen);
+        if (n < 0) {
+            if (errno == EINTR || errno == EWOULDBLOCK || errno == EAGAIN) continue;
+            perror("recvfrom");
+            continue;
+        }
+
+        double recv_time = now_elapsed();
+        struct timespec now;
+        clock_gettime(CLOCK_REALTIME, &now);
+
+        // Make sure the packet is long enough, and get header pointers
+        if ((size_t)n < sizeof(struct iphdr) + sizeof(struct icmphdr)) continue;
+        struct iphdr* ip_hdr = (struct iphdr* )buf;
+        int ip_hdr_len = ip_hdr->ihl * 4;
+        if ((size_t)n < (size_t)ip_hdr_len + sizeof(struct icmphdr)) continue;
+        struct icmphdr* icmp_hdr = (struct icmphdr*)(buf + ip_hdr_len);
+
+        // Ignore anything other than an echo reply
+        if (icmp_hdr->type != 0) continue;
+        if (icmp_hdr->code != 0) continue;
+
+        unsigned short id  = ntohs(icmp_hdr->un.echo.id);
+        unsigned short seq = ntohs(icmp_hdr->un.echo.sequence);
+
+        // Ignore packets from other PIDs
+        if (id != (pid & 0xFFFF)) continue;
+
+        // Retrieve the sending timestamp for this sequence number
+        pthread_mutex_lock(&sent_mutex);
+        double st = sent_time[seq % SEQ_TABLE_SIZE];
+        sent_time[seq % SEQ_TABLE_SIZE] = -1; // Reset value to -1 after reading in case the sequence number wraps
+        pthread_mutex_unlock(&sent_mutex);
+        if (st < 0.0) continue; // No matching send timestamp found
+
+        // Get the source address and TTL from the reply
+        char from_str[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &from.sin_addr, from_str, sizeof(from_str));
+        int ttl = ip_hdr->ttl;
+
+        // Compute the RTT and update statistics
+        double rtt_ms = (recv_time - st) * 1000.0;
+        atomic_fetch_add(&recv_count, 1);
+        if (rtt_min < 0.0 || rtt_ms < rtt_min) rtt_min = rtt_ms;
+        if (rtt_max < 0.0 || rtt_ms > rtt_max) rtt_max = rtt_ms;
+        rtt_sum += rtt_ms;
+
+        // Print per-packet output
+        if (!quiet) {
+            if (json) {
+                if (seq > 1) printf(",\n");
+                printf("\
+    {\n\
+        \"timestamp\": %ld.%06ld,\n\
+        \"bytes\": %lu,\n\
+        \"from\": \"%s\",\n\
+        \"icmp_seq\": %u,\n\
+        \"ttl\": %u,\n\
+        \"rtt\": %.3f\n\
+    }", (long)now.tv_sec, now.tv_nsec / 1000L, n-ip_hdr_len, from_str, seq, ttl, rtt_ms);
+            } else {
+                printf("[%ld.%06ld] %lu bytes from %s: icmp_seq=%u ttl=%u time=%.3f ms\n",
+                        (long)now.tv_sec, now.tv_nsec / 1000L, n-ip_hdr_len, from_str, seq, ttl, rtt_ms);
+            }
+        }
+    }
+    return NULL;
 }
 
 int main(int argc, char* argv[]) {

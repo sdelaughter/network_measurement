@@ -43,7 +43,7 @@ Options:\n\
     -i                  Average interval in seconds between packets. Mutually exclusive with -r. Default: 1.\n\
     -I                  Specify the name of a network interface to bind to.\n\
     -j                  Enable JSON-formatted output.\n\
-    -q                  Enable quiet mode, torint only summary statistics with no per-packet output.\n\
+    -q                  Enable quiet mode, to print only summary statistics with no per-packet output.\n\
     -r                  Average number of packets per second.  Mutually exclusive with -i. Default: 1.\n\
     -s                  Size of ICMP payload to send.  Additional 8-byte ICMP header will be added. Default: 56.\n\
     -w                  Duration in seconds to send for, unless count is reached first.  Default: unlimited.\n\

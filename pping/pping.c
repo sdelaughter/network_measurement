@@ -323,34 +323,35 @@ int main(int argc, char* argv[]) {
     sock = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
     if (sock < 0) {
         fprintf(stderr, "Failed to create socket, do you have root priviliges?\n");
-		return 1;
+		exit(1);
     }
     // int timeout_usec = timeout * 1000000;
     // int timeout_sec = floor(timeout_usec / 1000000);
     // timeout_usec = timeout_usec - (timeout_sec * 1000000);
-    int timeout_sec = 0;
-    int timeout_usec = 200000; // 200ms
-    struct timeval tv = { .tv_sec = timeout_sec, .tv_usec = timeout_usec };
+    struct timeval tv;
+    tv.tv_sec = 0;
+    tv.tv_usec = 200000; // 200ms timeout on receive socket
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
     if (bind_ifname != NULL) {
         if (setsockopt(sock, SOL_SOCKET, SO_BINDTODEVICE, bind_ifname, strlen(bind_ifname) + 1) < 0) {
             perror("Failed to bind to device with name %s.  Make sure the interface exists and you have root priviliges.");
             close(sock);
-            return 1;
+            exit(1);
         }
     }
 
     // Initialize array to store timestamps
-    for (int i = 0; i < SEQ_TABLE_SIZE; i++)
+    for (int i=0; i<SEQ_TABLE_SIZE; i++) {
         sent_time[i] = -1.0;
+    }
 
     // Start receiver thread to listen for Echo Reply packets
     pthread_t recv_tid;
     if (pthread_create(&recv_tid, NULL, receiver_thread, NULL) != 0) {
         perror("pthread_create");
         close(sock);
-        return 1;
+        exit(1);
     }
 
     // Create ICMP packet
@@ -369,24 +370,30 @@ int main(int argc, char* argv[]) {
     double send_ts;
     int seq = 1;
 
-    // Start sending packets
+    
     if (json) printf("[\n");
     else printf("PPING %s (%s) %u(%u) bytes of data.\n", target_ip, target_ip, packet_size-8, packet_size+20);
+
+    // Start sending packets.  Continue until count/duration is exceeded or Ctrl-C is pressed
     while ((elapsed < duration || duration < 0) && (seq <= count || count < 0) && !atomic_load(&stop_sender)) {
+        // Update sequence number and recompute checksum
         icmph->un.echo.sequence = htons((unsigned short)seq);
         icmph->checksum = 0;
         icmph->checksum = checksum((unsigned short*)packet, sizeof(packet));
 
+        // Compute timestamp relative to start time and store it for later
         send_ts = now_elapsed();
         pthread_mutex_lock(&sent_mutex);
         sent_time[seq % SEQ_TABLE_SIZE] = send_ts;
         pthread_mutex_unlock(&sent_mutex);
 
+        // Send packet
         ssize_t sent = sendto(sock, packet, sizeof(packet), 0,
                                 (struct sockaddr*)&addr, sizeof(addr));
         if (sent < 0) perror("sendto");
         else atomic_fetch_add(&sent_count, 1);
 
+        // Wait for some amount of time determined by Poisson distribution
         seq += 1;
         if ((seq <= count || count < 0) && !atomic_load(&stop_sender)) {
             struct timespec ts = poisson_delay(lambda);
@@ -394,6 +401,7 @@ int main(int argc, char* argv[]) {
             elapsed = now_elapsed();
 
             if (elapsed < duration || duration < 0) {
+                // Update interval statistics
                 double int_ms = timespec_to_msec(&ts);
                 if (int_min < 0.0 || int_ms < int_min) int_min = int_ms;
                 if (int_max < 0.0 || int_ms > int_max) int_max = int_ms;
@@ -420,17 +428,20 @@ int main(int argc, char* argv[]) {
         printf("\n--- %s pping statistics ---\n", target_ip);
         double total_duration = (now_elapsed()-timeout);
         printf("%d packets transmitted, %d received, %.1f%% packet loss, time %ums\n", n_sent, n_recv, loss_pct, (int)(total_duration*1000.0));
+        
+        // RTT statistics require at least one packet received
         if (n_recv > 0) {
             printf("rtt min/avg/max = %.3f/%.3f/%.3f ms\n",
                 rtt_min, rtt_sum / n_recv, rtt_max);
         }
+
+        // Statistics about inter-packet intervals require at least two packets sent
         if (n_sent > 1) {
             printf("interval min/avg/max = %.3f/%.3f/%.3f ms\n",
                 int_min, int_sum / n_sent, int_max);
             printf("pps avg = %.3f\n",
                 n_sent / total_duration);
         } else {
-            // Statistics about inter-packet intervals only make sense with >1 packets
             printf("interval min/avg/max = -1/-1/-1 ms\n");
             printf("pps avg = -1\n"); 
         }

@@ -63,6 +63,7 @@ static int      json        = 0;
 
 // Initialize other static variables
 static int sock;
+static struct sockaddr_in addr;
 static pid_t pid;
 static struct timespec start_ts;
 static double sent_time[SEQ_TABLE_SIZE];
@@ -210,16 +211,7 @@ static void* receiver_thread(void* arg) {
     return NULL;
 }
 
-int main(int argc, char* argv[]) {
-    srand(time(NULL));
-    pid = getpid();
-
-    // Prepare to handle interrupts
-    struct sigaction act;
-    bzero(&act, sizeof(act));
-    act.sa_handler = &interrupt_handler;
-    sigaction(SIGINT, &act, NULL);
-    
+void parse_args(int argc, char* argv[]) {
     // Parse command-line arguments
     int got_interval_arg = 0;
     int got_rate_arg = 0;
@@ -260,9 +252,11 @@ int main(int argc, char* argv[]) {
                 timeout = atof(optarg);
                 break;
             case 'h':
+                printf("%s", help_string);
+                exit(0);
             default:
                 printf("%s", help_string);
-                return 1;
+                exit(1);
         }
     }
     if (optind < argc) target_ip = argv[optind];
@@ -270,36 +264,60 @@ int main(int argc, char* argv[]) {
     // Make sure we don't have both -i and -r arguments
     if (got_interval_arg && got_rate_arg) {
         fprintf(stderr, "The -i (interval) and -r (rate) arguments are mutually exclusive.  You must use one or the other, not both.\n");
-        return 1;
+        exit(1);
     }
 
     // Make sure we don't have both -j and -q arguments
     if (got_json_arg && got_quiet_arg) {
         fprintf(stderr, "The -j (json) and -q (quiet) arguments are mutually exclusive.  You must use one or the other, not both.\n");
-        return 1;
+        exit(1);
     }
 
     // Make sure the target sending rate is positive
     if (lambda <= 0.0) {
         if (got_interval_arg) fprintf(stderr, "Interval must be positive\n");
         else fprintf(stderr, "Rate must be positive\n");
-        return 1;
+        exit(1);
+    }
+
+    // Make sure the destination is a valid IPv4 address
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    if (inet_pton(AF_INET, target_ip, &addr.sin_addr) != 1) {
+        fprintf(stderr, "Invalid target IP address: %s\n", target_ip);
+        exit(1);
     }
     
     #if DRY_RUN
         // Display arguments and exit, for debugging purposes
         printf("Arguments are:\n\
             Target IP: %s\n\
+            Interface: %s\n\
             Count: %d\n\
             Quiet: %u\n\
+            JSON: %u\n\
             Lambda: %f\n\
             Size: %u\n\
             Duration: %f\n\
             Timeout: %f\n",
-            target_ip, count, quiet, lambda, packet_size, duration, timeout
+            target_ip, bind_ifname, count, quiet, json, lambda, packet_size, duration, timeout
         );
-        return 0;
+        exit(0);
     #endif
+}
+
+int main(int argc, char* argv[]) {
+    srand(time(NULL));
+    pid = getpid();
+
+    // Prepare to handle interrupts
+    struct sigaction act;
+    bzero(&act, sizeof(act));
+    act.sa_handler = &interrupt_handler;
+    sigaction(SIGINT, &act, NULL);
+
+    // Parse command-line arguments (results will be stored in static variables)
+    parse_args(argc, argv);
 
     // Create a socket
     sock = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
@@ -321,16 +339,6 @@ int main(int argc, char* argv[]) {
             close(sock);
             return 1;
         }
-    }
-
-    // Make sure the destination is a valid IPv4 address
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    if (inet_pton(AF_INET, target_ip, &addr.sin_addr) != 1) {
-        fprintf(stderr, "Invalid target IP address: %s\n", target_ip);
-        close(sock);
-        return 1;
     }
 
     // Initialize array to store timestamps

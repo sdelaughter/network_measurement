@@ -231,6 +231,7 @@ static void* receiver_thread(void* arg) {
     socklen_t fromlen = sizeof(from);
 
     while (!atomic_load(&stop_receiver)) {
+        // Receive a packet
         ssize_t n = recvfrom(sock, buf, sizeof(buf), 0,
                               (struct sockaddr*)&from, &fromlen);
         if (n < 0) {
@@ -239,6 +240,8 @@ static void* receiver_thread(void* arg) {
             continue;
         }
 
+        // Compute time since start and current timestamp
+        // TODO: Combine these to use a single clock_gettime call
         double recv_time = now_elapsed();
         struct timespec now;
         clock_gettime(CLOCK_REALTIME, &now);
@@ -254,13 +257,12 @@ static void* receiver_thread(void* arg) {
         if (icmp_hdr->type != 0) continue;
         if (icmp_hdr->code != 0) continue;
 
-        unsigned short id  = ntohs(icmp_hdr->un.echo.id);
-        unsigned short seq = ntohs(icmp_hdr->un.echo.sequence);
-
         // Ignore packets from other PIDs
+        unsigned short id  = ntohs(icmp_hdr->un.echo.id);
         if (id != (pid & 0xFFFF)) continue;
 
         // Retrieve the sending timestamp for this sequence number
+        unsigned short seq = ntohs(icmp_hdr->un.echo.sequence);
         pthread_mutex_lock(&sent_mutex);
         double st = sent_time[seq % SEQ_TABLE_SIZE];
         sent_time[seq % SEQ_TABLE_SIZE] = -1; // Reset value to -1 after reading in case the sequence number wraps

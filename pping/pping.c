@@ -148,7 +148,8 @@ static double now_elapsed(void) {
 
 // Parse command-line arguments
 void parse_args(int argc, char* argv[]) {
-    int got_interval_arg = 0, got_rate_arg = 0, got_max_delay = 0, got_max_delay_2 = 0;
+    int got_interval_arg = 0, got_rate_arg = 0; // For exclusivity check
+    int got_max_delay = 0, got_max_delay_2 = 0; // For exclusivity check
     int opt;
     while ((opt = getopt(argc, argv, "c:hi:I:jqr:s:w:W:x:X:")) != -1) {
         switch (opt) {
@@ -207,7 +208,7 @@ void parse_args(int argc, char* argv[]) {
 
     // Make sure we don't have both -j and -q arguments
     if (json && quiet) {
-        fprintf(stderr, "The -j (json) and -q (quiet) arguments are mutually exclusive.  You must use one or the other, not both.\n");
+        fprintf(stderr, "The -j (json) and -q (quiet) arguments are mutually exclusive.  You may use one or the other, not both.\n");
         exit(1);
     }
 

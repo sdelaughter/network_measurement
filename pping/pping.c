@@ -21,6 +21,7 @@ gcc -O2 -Wall -o pping pping.c -lm
 #include <pthread.h>
 #include <stdatomic.h>
 #include <signal.h>
+#include <float.h>
 
 #include <sys/socket.h>
 #include <sys/time.h>
@@ -48,6 +49,8 @@ Options:\n\
     -s                  Size of ICMP payload to send.  Additional 8-byte ICMP header will be added. Default: 56.\n\
     -w                  Duration in seconds to send for, unless count is reached first.  Default: unlimited.\n\
     -W                  Time in seconds to wait for replies after last packet is sent.  Default: 1.\n\
+    -x                  Maximum interval between packets, enforced by setting any would-be longer delays to instead to this value.  Default: none.\n\
+    -X                  Maximum interval between packets, enforced by halving any would-be longer delays until they are <= this value.  Default: none.\n\
 ";
 
 // Set default values for command-line arguments
@@ -60,6 +63,8 @@ static int      count       = -1;
 static double   duration    = -1.0;
 static double   timeout     = 1.0;
 static int      json        = 0;
+static double   max_delay   = -1;
+static double   max_delay_2 = -1;
 
 // Initialize other static variables
 static int sock;
@@ -120,6 +125,14 @@ static struct timespec poisson_delay(double lambda) {
     } while (u <= 0.0); // avoid log(0)
     double seconds = -log(u) / lambda;
 
+    if (max_delay >= 0) {
+        seconds = fmin(seconds, max_delay);
+    } else if (max_delay_2 > 0) {
+        while (seconds > max_delay_2) {
+            seconds = seconds / 2.0;
+        }
+    }
+
     struct timespec ts;
     ts.tv_sec = (time_t)seconds;
     ts.tv_nsec = (long)((seconds - ts.tv_sec) * 1e9);
@@ -135,13 +148,16 @@ static double now_elapsed(void) {
 
 // Parse command-line arguments
 void parse_args(int argc, char* argv[]) {
-    int got_interval_arg = 0, got_rate_arg = 0;
+    int got_interval_arg = 0, got_rate_arg = 0, got_max_delay = 0, got_max_delay_2 = 0;
     int opt;
-    while ((opt = getopt(argc, argv, "c:hi:I:jqr:s:w:W:")) != -1) {
+    while ((opt = getopt(argc, argv, "c:hi:I:jqr:s:w:W:x:X:")) != -1) {
         switch (opt) {
             case 'c':
                 count = atoi(optarg);
                 break;
+            case 'h':
+                printf("%s", help_string);
+                exit(0);
             case 'i':
                 lambda = 1.0/atof(optarg);
                 got_interval_arg = 1;
@@ -168,9 +184,14 @@ void parse_args(int argc, char* argv[]) {
             case 'W':
                 timeout = atof(optarg);
                 break;
-            case 'h':
-                printf("%s", help_string);
-                exit(0);
+            case 'x':
+                max_delay = atof(optarg);
+                got_max_delay = 1;
+                break;
+            case 'X':
+                max_delay_2 = atof(optarg);
+                got_max_delay_2 = 1;
+                break;
             default:
                 printf("%s", help_string);
                 exit(1);
@@ -187,6 +208,22 @@ void parse_args(int argc, char* argv[]) {
     // Make sure we don't have both -j and -q arguments
     if (json && quiet) {
         fprintf(stderr, "The -j (json) and -q (quiet) arguments are mutually exclusive.  You must use one or the other, not both.\n");
+        exit(1);
+    }
+
+    // Make sure we don't have both -x and -X arguments
+    if (got_max_delay && got_max_delay_2) {
+        fprintf(stderr, "The -x (max delay limit) and -X (max delay halving) arguments are mutually exclusive.  You must use one or the other, not both.\n");
+        exit(1);
+    }
+
+    if (got_max_delay && max_delay < 0) {
+        fprintf(stderr, "The -x (max delay limit) argument must be greater than or equal to zero.\n");
+        exit(1);
+    }
+
+    if (got_max_delay_2 && (max_delay_2 <= 0)) {
+        fprintf(stderr, "The -X (max delay halving) argument must be greater than zero.\n");
         exit(1);
     }
 

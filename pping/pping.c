@@ -49,7 +49,7 @@ Options:\n\
     -s                  Size of ICMP payload to send.  Additional 8-byte ICMP header will be added. Default: 56.\n\
     -w                  Duration in seconds to send for, unless count is reached first.  Default: unlimited.\n\
     -W                  Time in seconds to wait for replies after last packet is sent.  Default: 1.\n\
-    -x                  Maximum interval between packets, enforced by setting any would-be longer delays to instead to this value.  Default: none.\n\
+    -x                  Maximum interval between packets, enforced by setting any would-be longer delays to instead be this value.  Default: none.\n\
     -X                  Maximum interval between packets, enforced by halving any would-be longer delays until they are <= this value.  Default: none.\n\
 ";
 

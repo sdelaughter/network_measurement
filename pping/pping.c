@@ -246,13 +246,6 @@ void parse_args(int argc, char* argv[]) {
         exit(2);
     }
 
-    // Make sure the target sending rate is positive
-    // if (lambda <= 0.0) {
-    //     if (got_interval_arg) fprintf(stderr, "Interval must be positive\n");
-    //     else fprintf(stderr, "Rate must be positive\n");
-    //     exit(1);
-    // }
-
     // Make sure the destination is a valid IPv4 address
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
@@ -272,8 +265,11 @@ void parse_args(int argc, char* argv[]) {
             Lambda: %f\n\
             Size: %u\n\
             Duration: %f\n\
-            Timeout: %f\n",
-            target_ip, bind_ifname, count, quiet, json, lambda, packet_size, duration, timeout
+            Timeout: %f\n\
+            Max Delay (Limit): %f\n\
+            Max Delay (Halving): %f\n\
+            Socket Debug: %u\n",
+            target_ip, bind_ifname, count, quiet, json, lambda, packet_size, duration, timeout, max_delay, max_delay_2, sock_debug
         );
         exit(0);
     #endif

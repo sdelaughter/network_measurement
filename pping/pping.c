@@ -32,6 +32,7 @@ gcc -O2 -Wall -o pping pping.c -lm
 
 #define SEQ_TABLE_SIZE  65536   // Max number of sequence/timestamp mappings to store before wrapping
 #define DRY_RUN 0               // Print argument values and exit, for debugging purposes
+#define VERSION "1.0"
 
 // Define help string
 const char* help_string = "\n\
@@ -47,6 +48,7 @@ Options:\n\
     -q                  Enable quiet mode, to print only summary statistics with no per-packet output.\n\
     -r                  Average number of packets per second.  Mutually exclusive with -i. Default: 1.\n\
     -s                  Size of ICMP payload to send.  Additional 8-byte ICMP header will be added. Default: 56.\n\
+    -V                  Print version number and exit.\n\
     -w                  Duration in seconds to send for, unless count is reached first.  Default: unlimited.\n\
     -W                  Time in seconds to wait for replies after last packet is sent.  Default: 1.\n\
     -x                  Maximum interval between packets, enforced by setting any would-be longer delays to instead be this value.  Default: none.\n\
@@ -151,7 +153,7 @@ void parse_args(int argc, char* argv[]) {
     int got_interval_arg = 0, got_rate_arg = 0; // For exclusivity check
     int got_max_delay = 0, got_max_delay_2 = 0; // For exclusivity check
     int opt;
-    while ((opt = getopt(argc, argv, "c:hi:I:jqr:s:w:W:x:X:")) != -1) {
+    while ((opt = getopt(argc, argv, "c:hi:I:jqr:s:Vw:W:x:X:")) != -1) {
         switch (opt) {
             case 'c':
                 count = atoi(optarg);
@@ -183,6 +185,10 @@ void parse_args(int argc, char* argv[]) {
                 break;
             case 's':
                 packet_size = atoi(optarg) + 8; // 8 byte ICMP header
+                break;
+            case 'V':
+                printf("pping v%s\n", VERSION);
+                exit(0);
                 break;
             case 'w':
                 duration = atof(optarg);

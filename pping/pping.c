@@ -206,7 +206,7 @@ void parse_args(int argc, char* argv[]) {
                 break;
             default:
                 printf("%s", help_string);
-                exit(1);
+                exit(2);
         }
     }
     if (optind < argc) target_ip = argv[optind];
@@ -214,31 +214,31 @@ void parse_args(int argc, char* argv[]) {
     // Make sure we don't have both -i and -r arguments
     if (got_interval_arg && got_rate_arg) {
         fprintf(stderr, "The -i (interval) and -r (rate) arguments are mutually exclusive.  You must use one or the other, not both.\n");
-        exit(1);
+        exit(2);
     }
 
     // Make sure we don't have both -j and -q arguments
     if (json && quiet) {
         fprintf(stderr, "The -j (json) and -q (quiet) arguments are mutually exclusive.  You may use one or the other, not both.\n");
-        exit(1);
+        exit(2);
     }
 
     // Make sure we don't have both -x and -X arguments
     if (got_max_delay && got_max_delay_2) {
         fprintf(stderr, "The -x (max delay limit) and -X (max delay halving) arguments are mutually exclusive.  You must use one or the other, not both.\n");
-        exit(1);
+        exit(2);
     }
 
     // Make sure the -x bound is >= 0 if set
     if (got_max_delay && max_delay < 0) {
         fprintf(stderr, "The -x (max delay limit) argument must be greater than or equal to zero.\n");
-        exit(1);
+        exit(2);
     }
 
     // Make sure the =X bound is > 0 if set
     if (got_max_delay_2 && (max_delay_2 <= 0)) {
         fprintf(stderr, "The -X (max delay halving) argument must be greater than zero.\n");
-        exit(1);
+        exit(2);
     }
 
     // Make sure the target sending rate is positive
@@ -253,7 +253,7 @@ void parse_args(int argc, char* argv[]) {
     addr.sin_family = AF_INET;
     if (inet_pton(AF_INET, target_ip, &addr.sin_addr) != 1) {
         fprintf(stderr, "Invalid target IP address: %s\n", target_ip);
-        exit(1);
+        exit(2);
     }
     
     #if DRY_RUN
@@ -371,7 +371,7 @@ int main(int argc, char* argv[]) {
     sock = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
     if (sock < 0) {
         fprintf(stderr, "Failed to create socket, do you have root priviliges?\n");
-		exit(1);
+		exit(2);
     }
 
     int timeout_usec = timeout * 1000000;
@@ -386,7 +386,7 @@ int main(int argc, char* argv[]) {
         if (setsockopt(sock, SOL_SOCKET, SO_BINDTODEVICE, bind_ifname, strlen(bind_ifname) + 1) < 0) {
             fprintf(stderr, "Failed to bind to device with name '%s'.  Make sure the interface exists and you have root priviliges.\n", bind_ifname);
             close(sock);
-            exit(1);
+            exit(2);
         }
     }
 
@@ -400,7 +400,7 @@ int main(int argc, char* argv[]) {
     if (pthread_create(&recv_tid, NULL, receiver_thread, NULL) != 0) {
         perror("pthread_create");
         close(sock);
-        exit(1);
+        exit(2);
     }
 
     // Create ICMP packet
@@ -468,18 +468,19 @@ int main(int argc, char* argv[]) {
     pthread_join(recv_tid, NULL);
 
     // Compute and print summary statistics
+    int n_sent = atomic_load(&sent_count);
+    int n_recv = atomic_load(&recv_count);
+    
     if (json) {
         printf("\n]\n");
-    } else {
-        int n_sent = atomic_load(&sent_count);
-        int n_recv = atomic_load(&recv_count);
+    } else {    
         double loss_pct = 0.0;
         if (n_sent > 0) {
             loss_pct = ((n_sent - n_recv) / n_sent) * 100.0;
         }
         printf("\n--- %s pping statistics ---\n", target_ip);
         double total_duration = (now_elapsed()-timeout);
-        printf("%d packets transmitted, %d received, %.1f%% packet loss, time %ums\n", n_sent, n_recv, loss_pct, (int)(total_duration*1000.0));
+        printf("%d packets transmitted, %d received, %.3f%% packet loss, time %ums\n", n_sent, n_recv, loss_pct, (int)(total_duration*1000.0));
         
         // RTT statistics require at least one packet received
         if (n_recv > 0) {
@@ -502,7 +503,14 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // Close the socket and exit
+    // Close the socket
     close(sock);
+
+    // Match regular ping's exit status
+    // If no responses received, return 1
+    // If deadline and count are both sepcified and responses received is less than count, return 1
+    // Otherwise, return 0
+    if (n_recv == 0) return 1;
+    if (count > 0 && duration > 0 && n_recv < count) return 1;
     return 0;
 }

@@ -42,6 +42,7 @@ Usage\n\
 Options:\n\
     <destination>       Destination IP address\n\
     -c                  Number of packets to send, unless duration is reached first. Default: unlimited.\n\
+    -d                  Set the SO_DEBUG option on the socket being used.\n\
     -i                  Average interval in seconds between packets. Mutually exclusive with -r. Default: 1.\n\
     -I                  Specify the name of a network interface to bind to.\n\
     -j                  Enable JSON-formatted output.\n\
@@ -67,6 +68,7 @@ static double   timeout     = 1.0;
 static int      json        = 0;
 static double   max_delay   = -1;
 static double   max_delay_2 = -1;
+static int      sock_debug  = 0;
 
 // Initialize other static variables
 static int sock;
@@ -153,10 +155,13 @@ void parse_args(int argc, char* argv[]) {
     int got_interval_arg = 0, got_rate_arg = 0; // For exclusivity check
     int got_max_delay = 0, got_max_delay_2 = 0; // For exclusivity check
     int opt;
-    while ((opt = getopt(argc, argv, "c:hi:I:jqr:s:Vw:W:x:X:")) != -1) {
+    while ((opt = getopt(argc, argv, "c:dhi:I:jqr:s:Vw:W:x:X:")) != -1) {
         switch (opt) {
             case 'c':
                 count = atoi(optarg);
+                break;
+            case 'd':
+                sock_debug = 1;
                 break;
             case 'h':
                 printf("%s", help_string);
@@ -374,6 +379,10 @@ int main(int argc, char* argv[]) {
 		exit(2);
     }
 
+    // Set socket debug option
+    setsockopt(sock, SOL_SOCKET, SO_DEBUG, (char *)&sock_debug, sizeof(sock_debug));
+
+    // Set socket timeout option
     int timeout_usec = timeout * 1000000;
     int timeout_sec = floor(timeout_usec / 1000000);
     timeout_usec = timeout_usec % 1000000;
@@ -470,7 +479,7 @@ int main(int argc, char* argv[]) {
     // Compute and print summary statistics
     int n_sent = atomic_load(&sent_count);
     int n_recv = atomic_load(&recv_count);
-    
+
     if (json) {
         printf("\n]\n");
     } else {    

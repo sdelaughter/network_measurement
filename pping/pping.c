@@ -160,7 +160,12 @@ void parse_args(int argc, char* argv[]) {
                 printf("%s", help_string);
                 exit(0);
             case 'i':
-                lambda = 1.0/atof(optarg);
+                double interval = atof(optarg);
+                if (interval <= 0) {
+                    lambda = -1;
+                } else {
+                    lambda = 1.0/atof(optarg);
+                }
                 got_interval_arg = 1;
                 break;
             case 'I':
@@ -218,22 +223,24 @@ void parse_args(int argc, char* argv[]) {
         exit(1);
     }
 
+    // Make sure the -x bound is >= 0 if set
     if (got_max_delay && max_delay < 0) {
         fprintf(stderr, "The -x (max delay limit) argument must be greater than or equal to zero.\n");
         exit(1);
     }
 
+    // Make sure the =X bound is > 0 if set
     if (got_max_delay_2 && (max_delay_2 <= 0)) {
         fprintf(stderr, "The -X (max delay halving) argument must be greater than zero.\n");
         exit(1);
     }
 
     // Make sure the target sending rate is positive
-    if (lambda <= 0.0) {
-        if (got_interval_arg) fprintf(stderr, "Interval must be positive\n");
-        else fprintf(stderr, "Rate must be positive\n");
-        exit(1);
-    }
+    // if (lambda <= 0.0) {
+    //     if (got_interval_arg) fprintf(stderr, "Interval must be positive\n");
+    //     else fprintf(stderr, "Rate must be positive\n");
+    //     exit(1);
+    // }
 
     // Make sure the destination is a valid IPv4 address
     memset(&addr, 0, sizeof(addr));
@@ -432,11 +439,14 @@ int main(int argc, char* argv[]) {
         // Wait for some amount of time determined by Poisson distribution
         seq += 1;
         if ((seq <= count || count < 0) && !atomic_load(&stop_sender)) {
-            struct timespec ts = poisson_delay(lambda);
-            nanosleep(&ts, NULL);
+            struct timespec ts;
+            if (lambda > 0) {
+                ts = poisson_delay(lambda);
+                nanosleep(&ts, NULL);
+            }
             elapsed = now_elapsed();
 
-            if (elapsed < duration || duration < 0) {
+            if ((elapsed < duration || duration < 0) && (lambda > 0)){
                 // Update interval statistics
                 double int_ms = timespec_to_msec(&ts);
                 if (int_min < 0.0 || int_ms < int_min) int_min = int_ms;
@@ -473,6 +483,9 @@ int main(int argc, char* argv[]) {
 
         // Statistics about inter-packet intervals require at least two packets sent
         if (n_sent > 1) {
+            if (lambda <= 0) {
+                int_min = 0; int_max = 0;
+            }
             printf("interval min/avg/max = %.3f/%.3f/%.3f ms\n",
                 int_min, int_sum / n_sent, int_max);
             printf("pps avg = %.3f\n",

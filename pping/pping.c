@@ -32,7 +32,7 @@ gcc -O2 -Wall -o pping pping.c -lm
 
 #define SEQ_TABLE_SIZE  65536   // Max number of sequence/timestamp mappings to store before wrapping
 #define DRY_RUN 0               // Print argument values and exit, for debugging purposes
-#define VERSION "1.0"
+#define VERSION "0.1"
 
 // Define help string
 const char* help_string = "\n\

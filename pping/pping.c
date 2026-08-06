@@ -54,6 +54,7 @@ Options:\n\
     -W                  Time in seconds to wait for replies after last packet is sent.  Default: 1.\n\
     -x                  Maximum interval between packets, enforced by setting any would-be longer delays to instead be this value.  Default: none.\n\
     -X                  Maximum interval between packets, enforced by halving any would-be longer delays until they are <= this value.  Default: none.\n\
+    -z                  Use a fixed interval instead of a Poisson distribution.\n\
 ";
 
 // Set default values for command-line arguments
@@ -69,6 +70,7 @@ static int      json        = 0;
 static double   max_delay   = -1;
 static double   max_delay_2 = -1;
 static int      sock_debug  = 0;
+static int      do_poisson = 1;
 
 // Initialize other static variables
 static int sock;
@@ -143,6 +145,14 @@ static struct timespec poisson_delay(double lambda) {
     return ts;
 }
 
+static struct timespec fixed_delay(double lambda) {
+    double seconds = 1.0/lambda;
+    struct timespec ts;
+    ts.tv_sec = (time_t)seconds;
+    ts.tv_nsec = (long)((seconds - ts.tv_sec) * 1e9);
+    return ts;
+}
+
 // Compute the amount of time elapsed since the program started
 static double now_elapsed(void) {
     struct timespec ts;
@@ -155,7 +165,7 @@ void parse_args(int argc, char* argv[]) {
     int got_interval_arg = 0, got_rate_arg = 0; // For exclusivity check
     int got_max_delay = 0, got_max_delay_2 = 0; // For exclusivity check
     int opt;
-    while ((opt = getopt(argc, argv, "c:dhi:I:jqr:s:Vw:W:x:X:")) != -1) {
+    while ((opt = getopt(argc, argv, "c:dhi:I:jqr:s:Vw:W:x:X:z")) != -1) {
         switch (opt) {
             case 'c':
                 count = atoi(optarg);
@@ -208,6 +218,9 @@ void parse_args(int argc, char* argv[]) {
             case 'X':
                 max_delay_2 = atof(optarg);
                 got_max_delay_2 = 1;
+                break;
+            case 'z':
+                do_poisson = 0;
                 break;
             default:
                 printf("%s", help_string);
@@ -268,8 +281,9 @@ void parse_args(int argc, char* argv[]) {
             Timeout: %f\n\
             Max Delay (Limit): %f\n\
             Max Delay (Halving): %f\n\
-            Socket Debug: %u\n",
-            target_ip, bind_ifname, count, quiet, json, lambda, packet_size, duration, timeout, max_delay, max_delay_2, sock_debug
+            Socket Debug: %u\n\
+            Do Poisson: %u\n",
+            target_ip, bind_ifname, count, quiet, json, lambda, packet_size, duration, timeout, max_delay, max_delay_2, sock_debug, do_poisson
         );
         exit(0);
     #endif
@@ -452,7 +466,11 @@ int main(int argc, char* argv[]) {
         if ((seq <= count || count < 0) && !atomic_load(&stop_sender)) {
             struct timespec ts;
             if (lambda > 0) {
-                ts = poisson_delay(lambda);
+                if (do_poisson) {
+                    ts = poisson_delay(lambda);
+                } else {
+                    ts = fixed_delay(lambda);
+                }
                 nanosleep(&ts, NULL);
             }
             elapsed = now_elapsed();

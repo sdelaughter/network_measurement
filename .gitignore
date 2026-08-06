@@ -1,3 +1,5 @@
 .venv
 *.csv
 *.json
+*.txt
+pping/pping

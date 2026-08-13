@@ -16,7 +16,7 @@ mkdir -p $data_dir
 for x in $(seq $min_interval $interval_step $max_interval); do
     echo ""
     echo "Testing rate $x with ping:"
-    sudo tcpdump -i $ifname icmp and 'icmp[0] == 8' >$data_dir/ping_$x.txt &
+    sudo tcpdump -n -i $ifname icmp and 'icmp[0] == 8' >$data_dir/ping_$x.txt &
     sleep 1 # Sleep before to make sure tcpdump captures the first packet
     sudo ping $target_host -q -c $probe_count -i $x
     sleep 1 # Sleep after to make sure tcpdump captures the last packet
@@ -24,7 +24,7 @@ for x in $(seq $min_interval $interval_step $max_interval); do
 
     echo ""
     echo "Testing rate $x with pping:"
-    sudo tcpdump -i $ifname icmp and 'icmp[0] == 8' >$data_dir/pping_$x.txt &
+    sudo tcpdump -n -i $ifname icmp and 'icmp[0] == 8' >$data_dir/pping_$x.txt &
     sleep 1
     sudo ./pping $target_host -z -q -c $probe_count -i $x # Use -z for fixed interval mode
     sleep 1

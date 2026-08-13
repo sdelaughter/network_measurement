@@ -30,9 +30,9 @@ Similar to `ping`, but sends packets at a rate that follows a Poisson distributi
 
 Outputs in the same format as `ping` by default to facilitate existing parsers (prefacing each line with a timestamp as would `ping -D`), but also supports JSON output.
 
-Can also be run with `-z` argument to use a fixed interval like regular `ping`, but with a shorter minimum interval and better accuracy for matching a target interval.  See `pping/measure_accuracy.sh` and `pping/plot_accuracy.ipynb` to compare fixed-interval accuracy between `pping` and regular `ping`.
+Can also be run with `-z` argument to use a fixed interval like regular `ping`, but with significantly better accuracy at matching a target interval with fine granularity, and significantly higher maximum packet rates when per-packet logging is enabled.
 
-Compile with: `gcc -O2 -Wall -o pping pping.c -lm`
+See `pping/measure_accuracy.sh` and `pping/plot_accuracy.ipynb` to compare interval accuracy between `pping` and regular `ping`.
 
 ### udping
 A simpler version of `kdelay`, without kernel timestamps. Outputs the following per measurement:

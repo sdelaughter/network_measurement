@@ -26,13 +26,9 @@ Similar to the [TWAMP](https://datatracker.ietf.org/doc/html/rfc5357) protocol, 
 Also includes a `plot.ipynb` notebook for computing and plotting various delays from the data.
 
 ### pping
-Similar to `ping`, but sends packets at a rate that follows a Poisson distribution.
+Similar to `ping`, but sends packets at more precise, fine-grained intervals, at intervals sampled from Poisson or Uniform distributions, and provides significantly higher maximum packet rates when per-packet logging is enabled.
 
 Outputs in the same format as `ping` by default to facilitate existing parsers (prefacing each line with a timestamp as would `ping -D`), but also supports JSON output.
-
-Can also be run with `-z` argument to use a fixed interval like regular `ping`, but with significantly better accuracy at matching a target interval with fine granularity, and significantly higher maximum packet rates when per-packet logging is enabled.
-
-See `pping/measure_accuracy.sh` and `pping/plot_accuracy.ipynb` to compare interval accuracy between `pping` and regular `ping`.
 
 ### udping
 A simpler version of `kdelay`, without kernel timestamps. Outputs the following per measurement:

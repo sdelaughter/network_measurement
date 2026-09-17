@@ -1,9 +1,10 @@
-/* pping (Poisson Ping)
+/* pping (Precise/Probabilistic Ping)
 Author: Sam DeLaughter
 
-Send ICMP Echo Requests at a rate that follows a Poisson distribution.
+Send ICMP Echo Requests at a rate that follows a Poisson or Uniform distribution.
 Prints output that (mostly) matches that of the traditional ping command, plus some extra statistics.
 Also supports JSON-formatted output (without summary statistics).
+For a fixed inter-packet interval, provides more accuracy for fine-grained interval adjustment than other implementations.
 
 For usage information, try `pping -h` or read the `help_string` below.
 
@@ -46,15 +47,16 @@ Options:\n\
     -i                  Average interval in seconds between packets. Mutually exclusive with -r. Default: 1.\n\
     -I                  Specify the name of a network interface to bind to.\n\
     -j                  Enable JSON-formatted output.\n\
+    -P                  Use a Poisson distribution insted of a fixed interval.\n\
     -q                  Enable quiet mode, to print only summary statistics with no per-packet output.\n\
     -r                  Average number of packets per second.  Mutually exclusive with -i. Default: 1.\n\
     -s                  Size of ICMP payload to send.  Additional 8-byte ICMP header will be added. Default: 56.\n\
+    -u                  Specify a range in seconds around the target interval set by -i/-r to sample intervals with a uniform distribution.\n\
     -V                  Print version number and exit.\n\
     -w                  Duration in seconds to send for, unless count is reached first.  Default: unlimited.\n\
     -W                  Time in seconds to wait for replies after last packet is sent.  Default: 1.\n\
     -x                  Maximum interval between packets, enforced by setting any would-be longer delays to instead be this value.  Default: none.\n\
     -X                  Maximum interval between packets, enforced by halving any would-be longer delays until they are <= this value.  Default: none.\n\
-    -z                  Use a fixed interval instead of a Poisson distribution.\n\
 ";
 
 // Set default values for command-line arguments
@@ -70,7 +72,8 @@ static int      json        = 0;
 static double   max_delay   = -1;
 static double   max_delay_2 = -1;
 static int      sock_debug  = 0;
-static int      do_poisson = 1;
+static int      do_poisson = 0;
+static double   uniform_range = -1.0;
 
 // Initialize other static variables
 static int sock;
@@ -145,6 +148,19 @@ static struct timespec poisson_delay(double lambda) {
     return ts;
 }
 
+static struct timespec uniform_delay(double lambda, double range) {
+    double  center    = 1.0 / lambda;
+    int64_t center_ns = (int64_t)(center * 1e9);
+    int64_t range_ns  = (int64_t)(range * 1e9);
+    int64_t offset_ns = (int64_t)((double)rand() / ((double)RAND_MAX + 1.0) * range_ns) - (range_ns/2);
+    int64_t total_ns  = center_ns + offset_ns;
+
+    struct timespec ts;
+    ts.tv_sec  = (time_t)(total_ns / 1000000000LL);
+    ts.tv_nsec = (long)(total_ns % 1000000000LL);
+    return ts;
+}
+
 static struct timespec fixed_delay(double lambda) {
     double seconds = 1.0/lambda;
     struct timespec ts;
@@ -165,7 +181,7 @@ void parse_args(int argc, char* argv[]) {
     int got_interval_arg = 0, got_rate_arg = 0; // For exclusivity check
     int got_max_delay = 0, got_max_delay_2 = 0; // For exclusivity check
     int opt;
-    while ((opt = getopt(argc, argv, "c:dhi:I:jqr:s:Vw:W:x:X:z")) != -1) {
+    while ((opt = getopt(argc, argv, "c:dhi:I:jPqr:s:u:Vw:W:x:X:")) != -1) {
         switch (opt) {
             case 'c':
                 count = atoi(optarg);
@@ -191,6 +207,9 @@ void parse_args(int argc, char* argv[]) {
             case 'j':
                 json = 1;
                 break;
+            case 'P':
+                do_poisson = 1;
+                break;
             case 'q':
                 quiet = 1;
                 break;
@@ -200,6 +219,9 @@ void parse_args(int argc, char* argv[]) {
                 break;
             case 's':
                 packet_size = atoi(optarg) + 8; // 8 byte ICMP header
+                break;
+            case 'u':
+                uniform_range = atof(optarg);
                 break;
             case 'V':
                 printf("pping v%s\n", VERSION);
@@ -219,9 +241,6 @@ void parse_args(int argc, char* argv[]) {
                 max_delay_2 = atof(optarg);
                 got_max_delay_2 = 1;
                 break;
-            case 'z':
-                do_poisson = 0;
-                break;
             default:
                 printf("%s", help_string);
                 exit(2);
@@ -232,6 +251,13 @@ void parse_args(int argc, char* argv[]) {
     // Make sure we don't have both -i and -r arguments
     if (got_interval_arg && got_rate_arg) {
         fprintf(stderr, "The -i (interval) and -r (rate) arguments are mutually exclusive.  You must use one or the other, not both.\n");
+        exit(2);
+    }
+
+
+    // Make sure we don't have both -P and -u arguments
+    if (do_poisson && (uniform_range >= 0.0)) {
+        fprintf(stderr, "The -P (Poisson) and -u (Uniform Range) arguments are mutually exclusive.  You must use one or the other, not both.\n");
         exit(2);
     }
 
@@ -259,6 +285,12 @@ void parse_args(int argc, char* argv[]) {
         exit(2);
     }
 
+    // Make sure if we have -x or -X we also have -P (no delay limits without Poisson delay)
+    if ((got_max_delay || got_max_delay_2) && !do_poisson) {
+        fprintf(stderr, "The -x (max delay limit) and -X (max delay halving) arguments must be used with the -P argument (Poisson delay).\n");
+        exit(2);
+    }
+
     // Make sure the destination is a valid IPv4 address
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
@@ -282,8 +314,9 @@ void parse_args(int argc, char* argv[]) {
             Max Delay (Limit): %f\n\
             Max Delay (Halving): %f\n\
             Socket Debug: %u\n\
+            Uniform Range: %f\n\
             Do Poisson: %u\n",
-            target_ip, bind_ifname, count, quiet, json, lambda, packet_size, duration, timeout, max_delay, max_delay_2, sock_debug, do_poisson
+            target_ip, bind_ifname, count, quiet, json, lambda, packet_size, duration, timeout, max_delay, max_delay_2, sock_debug, uniform_range, do_poisson
         );
         exit(0);
     #endif
@@ -468,6 +501,8 @@ int main(int argc, char* argv[]) {
             if (lambda > 0) {
                 if (do_poisson) {
                     ts = poisson_delay(lambda);
+                } else if (uniform_range >= 0.0) {
+                    ts = uniform_delay(lambda, uniform_range);
                 } else {
                     ts = fixed_delay(lambda);
                 }

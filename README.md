@@ -33,5 +33,5 @@ Outputs in the same format as `ping` by default to facilitate existing parsers (
 ### udping
 A simpler version of `kdelay`, without kernel timestamps. Outputs the following per measurement:
 `sequence, timestamp, rtt, send_delay, recv_delay`
-ddi
+
 Also includes a `plot.ipynb` notebook for plotting RTT and one-way delays

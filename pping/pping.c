@@ -267,7 +267,7 @@ void parse_args(int argc, char* argv[]) {
         exit(2);
     }
 
-    // Make sure we don't have both -P and -u arguments
+    // Make sure we don't have a uniform distribution range that allows for negative delays
     if ((uniform_range >= 0.0) && ((1.0/lambda - uniform_range/2.0) < 0)) {
         fprintf(stderr, "The range of uniform distribution must not allow negative delay intervals.  Set a higher target interval or a lower uniform range.\n");
         exit(2);

@@ -42,21 +42,23 @@ Usage\n\
 \n\
 Options:\n\
     <destination>       Destination IP address\n\
-    -c                  Number of packets to send, unless duration is reached first. Default: unlimited.\n\
+    -c <count>          Stop after sending <count> packets. Default: unlimited.\n\
     -d                  Set the SO_DEBUG option on the socket being used.\n\
-    -i                  Average interval in seconds between packets. Mutually exclusive with -r. Default: 1.\n\
-    -I                  Specify the name of a network interface to bind to.\n\
+    -g <group_size>     Send packets in bursts of <group_size> at a time before waiting for the next delay interval.  Default: 1.\n\
+    -h                  Show this help message and exit.\n\
+    -i <interval>       Wait <interval> seconds between packets (on average, if using -P or -u). Mutually exclusive with -r. Default: 1.\n\
+    -I <interface>      Bind to the network interface with name <interface>.\n\
     -j                  Enable JSON-formatted output.\n\
-    -P                  Use a Poisson distribution insted of a fixed interval.\n\
+    -P                  Use a Poisson distribution insted of a fixed interval delay between packets.\n\
     -q                  Enable quiet mode, to print only summary statistics with no per-packet output.\n\
-    -r                  Average number of packets per second.  Mutually exclusive with -i. Default: 1.\n\
-    -s                  Size of ICMP payload to send.  Additional 8-byte ICMP header will be added. Default: 56.\n\
-    -u                  Specify a range in seconds around the target interval set by -i/-r to sample intervals with a uniform distribution.\n\
-    -V                  Print version number and exit.\n\
-    -w                  Duration in seconds to send for, unless count is reached first.  Default: unlimited.\n\
-    -W                  Time in seconds to wait for replies after last packet is sent.  Default: 1.\n\
-    -x                  Maximum interval between packets, enforced by setting any would-be longer delays to instead be this value.  Default: none.\n\
-    -X                  Maximum interval between packets, enforced by halving any would-be longer delays until they are <= this value.  Default: none.\n\
+    -r <rate>           Send <rate> packets per second (on average, if using -P or -u). Mutually exclusive with -i. Default: 1.\n\
+    -s <size>           Send ICMP payloads with <size> bytes.  An additional 8-byte ICMP header will be added. Default: 56.\n\
+    -u <uniform_range>  Send packets at intervals following a uniform distribution with width <uniform_range> around the target interval set by -i/-r.\n\
+    -V                  Print the version number and exit.\n\
+    -w <deadline>       Stop sending after <deadline> seconds.  Default: unlimited.\n\
+    -W <timeout>        Wait <timeout> seconds for replies after the last packet is sent.  Default: 1.\n\
+    -x <max_interval>   Wait at most <maximum_interval> seconds between packets.  Enforced by setting any would-be longer delays to instead be this value.  Default: none.\n\
+    -X <max_interval>   Wait at most <maximum_interval> seconds between packets.  Enforced by halving any would-be longer delays until they are <= this value.  Default: none.\n\
 ";
 
 // Set default values for command-line arguments
@@ -74,6 +76,7 @@ static double   max_delay_2 = -1;
 static int      sock_debug  = 0;
 static int      do_poisson = 0;
 static double   uniform_range = -1.0;
+static int      group_size = 1;
 
 // Initialize other static variables
 static int sock;
@@ -181,13 +184,16 @@ void parse_args(int argc, char* argv[]) {
     int got_interval_arg = 0, got_rate_arg = 0; // For exclusivity check
     int got_max_delay = 0, got_max_delay_2 = 0; // For exclusivity check
     int opt;
-    while ((opt = getopt(argc, argv, "c:dhi:I:jPqr:s:u:Vw:W:x:X:")) != -1) {
+    while ((opt = getopt(argc, argv, "c:dg:hi:I:jPqr:s:u:Vw:W:x:X:")) != -1) {
         switch (opt) {
             case 'c':
                 count = atoi(optarg);
                 break;
             case 'd':
                 sock_debug = 1;
+                break;
+            case 'g':
+                group_size = atoi(optarg);
                 break;
             case 'h':
                 printf("%s", help_string);
@@ -305,6 +311,7 @@ void parse_args(int argc, char* argv[]) {
             Target IP: %s\n\
             Interface: %s\n\
             Count: %d\n\
+            Group Size: %u\n\
             Quiet: %u\n\
             JSON: %u\n\
             Lambda: %f\n\
@@ -316,7 +323,7 @@ void parse_args(int argc, char* argv[]) {
             Socket Debug: %u\n\
             Uniform Range: %f\n\
             Do Poisson: %u\n",
-            target_ip, bind_ifname, count, quiet, json, lambda, packet_size, duration, timeout, max_delay, max_delay_2, sock_debug, uniform_range, do_poisson
+            target_ip, bind_ifname, count, group_size, quiet, json, lambda, packet_size, duration, timeout, max_delay, max_delay_2, sock_debug, uniform_range, do_poisson
         );
         exit(0);
     #endif
@@ -477,25 +484,30 @@ int main(int argc, char* argv[]) {
 
     // Start sending packets.  Continue until count/duration is exceeded or Ctrl-C is pressed
     while ((elapsed < duration || duration < 0) && (seq <= count || count < 0) && !atomic_load(&stop_sender)) {
-        // Update sequence number and recompute checksum
-        icmph->un.echo.sequence = htons((unsigned short)seq);
-        icmph->checksum = 0;
-        icmph->checksum = checksum((unsigned short*)packet, sizeof(packet));
+        for (int i=0; i<group_size; i++) {
+            // Update sequence number and recompute checksum
+            icmph->un.echo.sequence = htons((unsigned short)seq);
+            icmph->checksum = 0;
+            icmph->checksum = checksum((unsigned short*)packet, sizeof(packet));
 
-        // Compute timestamp relative to start time and store it for later
-        send_ts = now_elapsed();
-        pthread_mutex_lock(&sent_mutex);
-        sent_time[seq % SEQ_TABLE_SIZE] = send_ts;
-        pthread_mutex_unlock(&sent_mutex);
+            // Compute timestamp relative to start time and store it for later
+            send_ts = now_elapsed();
+            pthread_mutex_lock(&sent_mutex);
+            sent_time[seq % SEQ_TABLE_SIZE] = send_ts;
+            pthread_mutex_unlock(&sent_mutex);
 
-        // Send packet
-        ssize_t sent = sendto(sock, packet, sizeof(packet), 0,
-                                (struct sockaddr*)&addr, sizeof(addr));
-        if (sent < 0) perror("sendto");
-        else atomic_fetch_add(&sent_count, 1);
+            // Send packet
+            ssize_t sent = sendto(sock, packet, sizeof(packet), 0,
+                                    (struct sockaddr*)&addr, sizeof(addr));
+            if (sent < 0) perror("sendto");
+            else atomic_fetch_add(&sent_count, 1);
 
-        // Wait for some amount of time determined by Poisson distribution
-        seq += 1;
+            // Wait for some amount of time determined by Poisson distribution
+            seq += 1;
+            if (seq > count && count >= 0) {
+                break;
+            }
+        }
         if ((seq <= count || count < 0) && !atomic_load(&stop_sender)) {
             struct timespec ts;
             if (lambda > 0) {
@@ -552,7 +564,7 @@ int main(int argc, char* argv[]) {
                 int_min = 0; int_max = 0;
             }
             printf("interval min/avg/max = %.3f/%.3f/%.3f ms\n",
-                int_min, int_sum / n_sent, int_max);
+                int_min, int_sum / floor(n_sent/group_size), int_max);
             printf("pps avg = %.3f\n",
                 n_sent / total_duration);
         } else {

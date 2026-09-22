@@ -35,6 +35,8 @@ gcc -O2 -Wall -o pping pping.c -lm
 #define DRY_RUN 0               // Print argument values and exit, for debugging purposes
 #define VERSION "0.1"
 
+
+#pragma region Usage
 // Define help string
 const char* help_string = "\n\
 Usage\n\
@@ -62,6 +64,10 @@ Options:\n\
     -X <max_interval>   Wait at most <maximum_interval> seconds between packets.  Enforced by halving any would-be longer delays until they are <= this value.  Default: none.\n\
 ";
 
+#pragma endregion Usage
+
+
+#pragma region Static_Variables
 // Set default values for command-line arguments
 static char*    target_ip   = "127.0.0.1";
 static char*    bind_ifname = NULL;
@@ -93,20 +99,83 @@ static double rtt_min = -1.0, rtt_max = -1.0, rtt_sum = 0.0;
 static double int_min = -1.0, int_max = -1.0, int_sum = 0.0;
 static atomic_bool stop_sender = 0;
 static atomic_bool stop_receiver = 0;
+#pragma endregion Static_Variables
 
-// Helpers for time conversion
-static inline double timespec_to_msec(const struct timespec *ts) {
-    return ts->tv_sec * 1000 + ts->tv_nsec / 1000000;
+
+#pragma region Control_Flow
+// Catch ctrl-C signal and stop the sender
+static void interrupt_handler(int i) {
+    atomic_store(&stop_sender, 1);
 }
-static inline double timespec_to_nsec(const struct timespec *ts) {
+#pragma endregion Control_Flow
+
+
+#pragma region Time_Helpers
+inline double timespec_to_sec(const struct timespec *ts) {
+    return (double)ts->tv_sec + (double)ts->tv_nsec / 1e9;
+}
+
+inline double timespec_to_msec(const struct timespec *ts) {
+    return (double)ts->tv_sec * 1e3 + (double)ts->tv_nsec / 1e6;
+}
+
+inline double timespec_to_nsec(const struct timespec *ts) {
     return ts->tv_sec * 1e9 + ts->tv_nsec;
 }
 
-// Catch ctrl-C signal and stop the sender
-void interrupt_handler(int i) {
-    atomic_store(&stop_sender, 1);
+inline char* timespec_to_str(const struct timespec *ts) {
+    char* time_str;
+    if (0 > asprintf(&time_str, "%ld.%06ld", (long)ts->tv_sec, ts->tv_nsec / 1000L)) {
+        return NULL;
+    }
+    return time_str;
 }
 
+inline struct timespec sec_to_timespec(double seconds) {
+    struct timespec ts;
+    ts.tv_sec = (time_t)seconds;
+    ts.tv_nsec = (long)((seconds - ts.tv_sec) * 1e9);
+    if (ts.tv_nsec >= 1000000000L) {
+        ts.tv_sec++;
+        ts.tv_nsec -= 1000000000L;
+    }
+    return ts;
+}
+
+inline struct timespec msec_to_timespec(int64_t msec) {
+    struct timespec ts;
+    ts.tv_sec  = (time_t)(msec / 1000);
+    ts.tv_nsec = (long)((msec % 1000) * 1000000LL);
+    return ts;
+}
+
+inline struct timespec nsec_to_timespec(int64_t nsec) {
+    struct timespec ts;
+    ts.tv_sec  = (time_t)(nsec / 1000000000LL);
+    ts.tv_nsec = (long)(nsec % 1000000000LL);
+    return ts;
+}
+
+// Get the current time
+inline struct timespec current_time() {
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return ts;
+}
+
+// Compute the difference between two timespecs in seconds
+inline double time_diff(struct timespec start, struct timespec stop) {
+    return (stop.tv_sec - start.tv_sec) + ((stop.tv_nsec - start.tv_nsec) / 1e9);
+}
+
+// Compute the amount of time elapsed since the program started
+static inline double now_elapsed(void) {
+    return time_diff(start_ts, current_time());
+}
+#pragma endregion Time_Helpers
+
+
+#pragma region Network_Helpers
 // The standard function for calculating Internet checksums
 unsigned short checksum(unsigned short* ptr, int nbytes) {
 	register long sum;
@@ -131,7 +200,53 @@ unsigned short checksum(unsigned short* ptr, int nbytes) {
 	return(answer);
 }
 
-// Determine a random amount of time to wait based on a given lambda
+inline int packet_is_icmp(const struct iphdr* ip_hdr) {
+    return (ip_hdr->protocol == IPPROTO_ICMP);
+}
+
+inline int icmp_is_echo_request(const struct icmphdr* icmp_hdr) {
+    return ((icmp_hdr->type == 8) && (icmp_hdr->code == 0));
+}
+
+inline int icmp_is_echo_reply(const struct icmphdr* icmp_hdr) {
+    return ((icmp_hdr->type == 0) && (icmp_hdr->code == 0));
+}
+
+inline int icmp_is_ttl_exceeded(const struct icmphdr* icmp_hdr) {
+    return ((icmp_hdr->type == 11) && (icmp_hdr->code == 0));
+}
+
+#pragma endregion Network_Helpers
+
+
+#pragma region Socket_Options
+static int set_socket_ttl(int s, int ttl) {
+    return setsockopt(s, IPPROTO_IP, IP_TTL, &ttl, sizeof(ttl));
+}
+
+static int set_socket_timeout(int s, double duration) {
+    int timeout_usec = duration * 1000000;
+    int timeout_sec = floor(timeout_usec / 1000000);
+    timeout_usec = timeout_usec % 1000000;
+    struct timeval tv;
+    tv.tv_sec = timeout_sec;
+    tv.tv_usec = timeout_usec;
+    return setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+}
+
+static int set_socket_debug(int s, int enable) {
+    return setsockopt(s, SOL_SOCKET, SO_DEBUG, (char *)&enable, sizeof(enable));
+}
+
+static int set_socket_bind_ifname(int s, char* ifname) {
+    return setsockopt(sock, SOL_SOCKET, SO_BINDTODEVICE, ifname, strlen(ifname) + 1);
+}
+
+#pragma endregion Socket_Options
+
+
+#pragma region Delay_Computation
+
 static struct timespec poisson_delay(double lambda) {
     double u;
     do {
@@ -147,9 +262,7 @@ static struct timespec poisson_delay(double lambda) {
         }
     }
 
-    struct timespec ts;
-    ts.tv_sec = (time_t)seconds;
-    ts.tv_nsec = (long)((seconds - ts.tv_sec) * 1e9);
+    struct timespec ts = sec_to_timespec(seconds);
     return ts;
 }
 
@@ -160,9 +273,7 @@ static struct timespec uniform_delay(double lambda, double range) {
     int64_t offset_ns = (int64_t)((double)rand() / ((double)RAND_MAX + 1.0) * range_ns) - (range_ns/2);
     int64_t total_ns  = center_ns + offset_ns;
 
-    struct timespec ts;
-    ts.tv_sec  = (time_t)(total_ns / 1000000000LL);
-    ts.tv_nsec = (long)(total_ns % 1000000000LL);
+    struct timespec ts = nsec_to_timespec(total_ns);
     return ts;
 }
 
@@ -174,12 +285,27 @@ static struct timespec fixed_delay(double lambda) {
     return ts;
 }
 
-// Compute the amount of time elapsed since the program started
-static double now_elapsed(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (ts.tv_sec - start_ts.tv_sec) + (ts.tv_nsec - start_ts.tv_nsec) / 1e9;
+#pragma endregion Delay_Functions
+
+
+#pragma region Misc_Helpers
+
+ // Retrieve the sending timestamp for a given sequence number
+static double get_sent_timestamp(unsigned short seq) {
+    pthread_mutex_lock(&sent_mutex);
+    double st = sent_time[seq % SEQ_TABLE_SIZE];
+    sent_time[seq % SEQ_TABLE_SIZE] = -1; // Reset value to -1 after reading in case the sequence number wraps
+    pthread_mutex_unlock(&sent_mutex);
+    return st;
 }
+
+static inline int same_process(const struct icmphdr* icmp_hdr) {
+    unsigned short id  = ntohs(icmp_hdr->un.echo.id);
+    return (id == (pid & 0xFFFF));
+}
+
+#pragma endregion Misc_Helpers
+
 
 // Parse command-line arguments
 void parse_args(int argc, char* argv[]) {
@@ -340,15 +466,6 @@ void parse_args(int argc, char* argv[]) {
     #endif
 }
 
-double get_sent_timestamp(unsigned short seq) {
-    // Retrieve the sending timestamp for this sequence number
-    pthread_mutex_lock(&sent_mutex);
-    double st = sent_time[seq % SEQ_TABLE_SIZE];
-    sent_time[seq % SEQ_TABLE_SIZE] = -1; // Reset value to -1 after reading in case the sequence number wraps
-    pthread_mutex_unlock(&sent_mutex);
-    return st;
-}
-
 // Listen for echo reply packets
 static void* receiver_thread(void* arg) {
     (void)arg;
@@ -367,111 +484,106 @@ static void* receiver_thread(void* arg) {
         }
 
         // Compute time since start and current timestamp
-        // TODO: Combine these to use a single clock_gettime call
-        double recv_time = now_elapsed();
-        struct timespec now;
-        clock_gettime(CLOCK_REALTIME, &now);
+        struct timespec now = current_time();
+        double recv_time = time_diff(start_ts, now);
 
         // Get the source address from the reply
         char from_str[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &from.sin_addr, from_str, sizeof(from_str));
 
-        // Make sure the packet is long enough, and get header pointers
+        // Make sure the packet is long enough, and get header pointer
         if ((size_t)n < sizeof(struct iphdr) + sizeof(struct icmphdr)) continue;
         struct iphdr* ip_hdr = (struct iphdr* )buf;
+
+        // Make sure the packet is ICMP
+        if (!packet_is_icmp(ip_hdr)) continue;
+
+        // Get ICMP header pointer
         int ip_hdr_len = ip_hdr->ihl * 4;
         if ((size_t)n < (size_t)ip_hdr_len + sizeof(struct icmphdr)) continue;
         struct icmphdr* icmp_hdr = (struct icmphdr*)(buf + ip_hdr_len);
 
         // Handle Echo Reply (Type=0, Code=0)
-        if (icmp_hdr->type == 0) {
-            if (icmp_hdr->code == 0) {
-                // Ignore packets from other PIDs
-                unsigned short id  = ntohs(icmp_hdr->un.echo.id);
-                if (id != (pid & 0xFFFF)) continue;
+        if (icmp_is_echo_reply(icmp_hdr)) {
+            // Ignore packets from other PIDs
+            if (!same_process(icmp_hdr)) continue;
 
-                // Retrieve the sending timestamp for this sequence number
-                unsigned short seq = ntohs(icmp_hdr->un.echo.sequence);
-                double st = get_sent_timestamp(seq);
-                if (st < 0.0) continue; // No matching send timestamp found
+            // Retrieve the sending timestamp for this sequence number
+            unsigned short seq = ntohs(icmp_hdr->un.echo.sequence);
+            double st = get_sent_timestamp(seq);
+            if (st < 0.0) continue; // No matching send timestamp found
 
-                // Compute the RTT and update statistics
-                double rtt_ms = (recv_time - st) * 1000.0;
-                atomic_fetch_add(&recv_count, 1);
-                if (rtt_min < 0.0 || rtt_ms < rtt_min) rtt_min = rtt_ms;
-                if (rtt_max < 0.0 || rtt_ms > rtt_max) rtt_max = rtt_ms;
-                rtt_sum += rtt_ms;
+            // Compute the RTT and update statistics
+            double rtt_ms = (recv_time - st) * 1000.0;
+            atomic_fetch_add(&recv_count, 1);
+            if (rtt_min < 0.0 || rtt_ms < rtt_min) rtt_min = rtt_ms;
+            if (rtt_max < 0.0 || rtt_ms > rtt_max) rtt_max = rtt_ms;
+            rtt_sum += rtt_ms;
 
-                // Print per-packet output
-                if (!quiet) {
-                    if (json) {
-                        if (seq > 1) printf(",\n");
-                        printf("\
-            {\n\
-                \"timestamp\": %ld.%06ld,\n\
-                \"bytes\": %lu,\n\
-                \"from\": \"%s\",\n\
-                \"icmp_seq\": %u,\n\
-                \"ttl\": %u,\n\
-                \"rtt\": %.3f,\n\
-                \"err\": \"\"\n\
-            }", (long)now.tv_sec, now.tv_nsec / 1000L, n-ip_hdr_len, from_str, seq, ip_hdr->ttl, rtt_ms);
-                    } else {
-                        printf("[%ld.%06ld] %lu bytes from %s: icmp_seq=%u ttl=%u time=%.3f ms\n",
-                                (long)now.tv_sec, now.tv_nsec / 1000L, n-ip_hdr_len, from_str, seq, ip_hdr->ttl, rtt_ms
-                        );
-                    }
+            // Print per-packet output
+            if (!quiet) {
+                if (json) {
+                    if (seq > 1) printf(",\n");
+                    printf("\
+        {\n\
+            \"timestamp\": %s,\n\
+            \"bytes\": %lu,\n\
+            \"from\": \"%s\",\n\
+            \"icmp_seq\": %u,\n\
+            \"ttl\": %u,\n\
+            \"rtt\": %.3f,\n\
+            \"err\": \"\"\n\
+        }", timespec_to_str(&now), n-ip_hdr_len, from_str, seq, ip_hdr->ttl, rtt_ms);
+                } else {
+                    printf("[%s] %lu bytes from %s: icmp_seq=%u ttl=%u time=%.3f ms\n",
+                            timespec_to_str(&now), n-ip_hdr_len, from_str, seq, ip_hdr->ttl, rtt_ms
+                    );
                 }
             }
         }
         
-        // Handle TTL Exceeded
-        else if (icmp_hdr->type == 11) {
-            if (icmp_hdr->code == 0) {
-                size_t payload_offset = ip_hdr_len + sizeof(struct icmphdr);
+        // Handle TTL Exceeded (Type=11, Code=0)
+        else if (icmp_is_ttl_exceeded(icmp_hdr)) {
+            // Get embedded header from original Echo Request
+            size_t payload_offset = ip_hdr_len + sizeof(struct icmphdr);
+            if ((size_t)n < payload_offset + sizeof(struct iphdr)) continue;
+            struct iphdr *inner_ip = (struct iphdr *)(buf + payload_offset);
+            if (!packet_is_icmp(inner_ip)) continue;
+            size_t inner_ip_len = (size_t)inner_ip->ihl * 4;
+            if (inner_ip_len < sizeof(struct iphdr)) continue;
+            if ((size_t)n < payload_offset + inner_ip_len + sizeof(struct icmphdr)) continue;
+            struct icmphdr *inner_icmp = (struct icmphdr *)(buf + payload_offset + inner_ip_len);
+            if (!icmp_is_echo_request(inner_icmp)) continue;
 
-                // Get embedded header from original Echo Request
-                if ((size_t)n < payload_offset + sizeof(struct iphdr)) continue;
-                struct iphdr *inner_ip = (struct iphdr *)(buf + payload_offset);
-                size_t inner_ip_len = (size_t)inner_ip->ihl * 4;
-                if (inner_ip_len < sizeof(struct iphdr)) continue;
-                if ((size_t)n < payload_offset + inner_ip_len + sizeof(struct icmphdr)) continue;
-                struct icmphdr *inner_icmp = (struct icmphdr *)(buf + payload_offset + inner_ip_len);
+            // Make sure the expired Echo Request was one we sent
+            if (!same_process(inner_icmp)) continue;
 
-                // Make sure the expired Echo Request was one we sent
-                if (inner_ip->protocol != IPPROTO_ICMP) continue;
-                if (inner_icmp->type != ICMP_ECHO || inner_icmp->code != 0) continue;
-                unsigned short id = ntohs(inner_icmp->un.echo.id);
-                if (id != (pid & 0xffff))
-                    continue;
+            // Get the sequence number for the expired Echo Request and retrieve its sending timestamp
+            unsigned short seq = ntohs(inner_icmp->un.echo.sequence);
+            double st = get_sent_timestamp(seq);
+            if (st < 0.0) continue; // No matching send timestamp found
 
-                unsigned short seq = ntohs(inner_icmp->un.echo.sequence);
-                // Retrieve the sending timestamp for this sequence number
-                double st = get_sent_timestamp(seq);
-                if (st < 0.0) continue; // No matching send timestamp found
+            // Compute the RTT from where TTL expired
+            double rtt_ms = (recv_time - st) * 1000.0;
 
-                // Compute the RTT from where TTL expired
-                double rtt_ms = (recv_time - st) * 1000.0;
-
-                // Print per-packet output
-                if (!quiet) {
-                    if (json) {
-                        if (seq > 1) printf(",\n");
-                        printf("\
-            {\n\
-                \"timestamp\": %ld.%06ld,\n\
-                \"bytes\": %lu,\n\
-                \"from\": \"%s\",\n\
-                \"icmp_seq\": %u,\n\
-                \"ttl\": %u,\n\
-                \"rtt\": %.3f,\n\
-                \"err\": \"%s\"\n\
-            }", (long)now.tv_sec, now.tv_nsec / 1000L, n-ip_hdr_len, from_str, seq, ip_hdr->ttl, rtt_ms, "TTL Exceeded");
-                    } else {
-                        printf("[%ld.%06ld] From %s icmp_seq=%u Time to live exceeded after %.3f ms", 
-                            (long)now.tv_sec, now.tv_nsec / 1000L, from_str, seq, rtt_ms
-                        );
-                    }
+            // Print per-packet output
+            if (!quiet) {
+                if (json) {
+                    if (seq > 1) printf(",\n");
+                    printf("\
+        {\n\
+            \"timestamp\": %s,\n\
+            \"bytes\": %lu,\n\
+            \"from\": \"%s\",\n\
+            \"icmp_seq\": %u,\n\
+            \"ttl\": %u,\n\
+            \"rtt\": %.3f,\n\
+            \"err\": \"%s\"\n\
+        }", timespec_to_str(&now), n-ip_hdr_len, from_str, seq, ip_hdr->ttl, rtt_ms, "TTL Exceeded");
+                } else {
+                    printf("[%s] From %s icmp_seq=%u Time to live exceeded after %.3f ms\n", 
+                        timespec_to_str(&now), from_str, seq, rtt_ms
+                    );
                 }
             }
         }
@@ -500,19 +612,13 @@ int main(int argc, char* argv[]) {
     }
 
     // Set socket debug option
-    setsockopt(sock, SOL_SOCKET, SO_DEBUG, (char *)&sock_debug, sizeof(sock_debug));
+    set_socket_debug(sock, sock_debug);
 
     // Set socket timeout option
-    int timeout_usec = timeout * 1000000;
-    int timeout_sec = floor(timeout_usec / 1000000);
-    timeout_usec = timeout_usec % 1000000;
-    struct timeval tv;
-    tv.tv_sec = timeout_sec;
-    tv.tv_usec = timeout_usec;
-    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    set_socket_timeout(sock, timeout);
 
     if (bind_ifname != NULL) {
-        if (setsockopt(sock, SOL_SOCKET, SO_BINDTODEVICE, bind_ifname, strlen(bind_ifname) + 1) < 0) {
+        if (set_socket_bind_ifname(sock, bind_ifname) < 0) {
             fprintf(stderr, "Failed to bind to device with name '%s'.  Make sure the interface exists and you have root privileges.\n", bind_ifname);
             close(sock);
             exit(2);
@@ -520,7 +626,7 @@ int main(int argc, char* argv[]) {
     }
 
     if (set_ttl > 0) {
-        if (setsockopt(sock, IPPROTO_IP, IP_TTL, &set_ttl, sizeof(set_ttl)) < 0) {
+        if (set_socket_ttl(sock, set_ttl) < 0) {
             fprintf(stderr, "Failed to set socket TTL=%u.\n", set_ttl);
             close(sock);
             exit(2);
@@ -551,7 +657,7 @@ int main(int argc, char* argv[]) {
         packet[i] = (char)(i & 0xFF);
     }
 
-    clock_gettime(CLOCK_MONOTONIC, &start_ts);
+    clock_gettime(CLOCK_REALTIME, &start_ts);
     double elapsed = 0.0;
     double send_ts;
     int seq = 1;
@@ -579,7 +685,7 @@ int main(int argc, char* argv[]) {
                                     (struct sockaddr*)&addr, sizeof(addr));
             if (sent < 0) perror("sendto");
             else atomic_fetch_add(&sent_count, 1);
-
+            
             // Wait for some amount of time determined by Poisson distribution
             seq += 1;
             if (seq > count && count >= 0) {
@@ -597,6 +703,8 @@ int main(int argc, char* argv[]) {
                     ts = fixed_delay(lambda);
                 }
                 nanosleep(&ts, NULL);
+            } else {
+                // No delay
             }
             elapsed = now_elapsed();
 
@@ -627,8 +735,8 @@ int main(int argc, char* argv[]) {
             loss_pct = ((n_sent - n_recv) / n_sent) * 100.0;
         }
         printf("\n--- %s pping statistics ---\n", target_ip);
-        double total_duration = (now_elapsed()-timeout);
-        printf("%d packets transmitted, %d received, %.3f%% packet loss, time %ums\n", n_sent, n_recv, loss_pct, (int)(total_duration*1000.0));
+        double total_duration = now_elapsed()-timeout;
+        printf("%d packets transmitted, %d received, %.3f%% packet loss, time %.3fms\n", n_sent, n_recv, loss_pct, (total_duration*1000.0));
         
         // RTT statistics require at least one packet received
         if (n_recv > 0) {
@@ -642,9 +750,10 @@ int main(int argc, char* argv[]) {
                 int_min = 0; int_max = 0;
             }
             printf("interval min/avg/max = %.3f/%.3f/%.3f ms\n",
-                int_min, int_sum / floor(n_sent/group_size), int_max);
-            printf("pps avg = %.3f\n",
-                n_sent / total_duration);
+                int_min, int_sum / (floor(n_sent/group_size)-1), int_max); // Floor in case last group is smaller.  Minus 1 because we're measuring gaps
+
+            double pps = (double)n_sent/total_duration;
+            printf("pps avg = %.3f\n", pps);
         } else {
             printf("interval min/avg/max = -1/-1/-1 ms\n");
             printf("pps avg = -1\n"); 

@@ -7,7 +7,7 @@ Run `setup_venv.sh` to create a python virtual environment with dependencies nec
 ## List of Tools
 - [hopping (Hop-by-hop Ping)](#hopping)
 - [kdelay (Kernel Component Delay)](#kdelay)
-- [pping (Poisson Ping)](#pping)
+- [pping (Precise/Probabilistic Ping)](#pping)
 - [udping (UDP Ping)](#udping)
 
 ### hopping

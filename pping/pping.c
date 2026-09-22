@@ -495,7 +495,7 @@ int main(int argc, char* argv[]) {
     // Create a socket
     sock = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
     if (sock < 0) {
-        fprintf(stderr, "Failed to create socket, do you have root priviliges?\n");
+        fprintf(stderr, "Failed to create socket, do you have root privileges?\n");
 		exit(2);
     }
 
@@ -513,7 +513,7 @@ int main(int argc, char* argv[]) {
 
     if (bind_ifname != NULL) {
         if (setsockopt(sock, SOL_SOCKET, SO_BINDTODEVICE, bind_ifname, strlen(bind_ifname) + 1) < 0) {
-            fprintf(stderr, "Failed to bind to device with name '%s'.  Make sure the interface exists and you have root priviliges.\n", bind_ifname);
+            fprintf(stderr, "Failed to bind to device with name '%s'.  Make sure the interface exists and you have root privileges.\n", bind_ifname);
             close(sock);
             exit(2);
         }
@@ -656,7 +656,7 @@ int main(int argc, char* argv[]) {
 
     // Match regular ping's exit status
     // If no responses received, return 1
-    // If deadline and count are both sepcified and responses received is less than count, return 1
+    // If deadline and count are both specified and responses received is less than count, return 1
     // Otherwise, return 0
     if (n_recv == 0) return 1;
     if (count > 0 && duration > 0 && n_recv < count) return 1;

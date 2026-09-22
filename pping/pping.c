@@ -53,6 +53,7 @@ Options:\n\
     -q                  Enable quiet mode, to print only summary statistics with no per-packet output.\n\
     -r <rate>           Send <rate> packets per second (on average, if using -P or -u). Mutually exclusive with -i. Default: 1.\n\
     -s <size>           Send ICMP payloads with <size> bytes.  An additional 8-byte ICMP header will be added. Default: 56.\n\
+    -t <TTL>            Set the IP time-to-live field to <TTL>.\n\
     -u <uniform_range>  Send packets at intervals following a uniform distribution with width <uniform_range> around the target interval set by -i/-r.\n\
     -V                  Print the version number and exit.\n\
     -w <deadline>       Stop sending after <deadline> seconds.  Default: unlimited.\n\
@@ -77,6 +78,7 @@ static int      sock_debug  = 0;
 static int      do_poisson = 0;
 static double   uniform_range = -1.0;
 static int      group_size = 1;
+static int      set_ttl = -1;
 
 // Initialize other static variables
 static int sock;
@@ -184,7 +186,7 @@ void parse_args(int argc, char* argv[]) {
     int got_interval_arg = 0, got_rate_arg = 0; // For exclusivity check
     int got_max_delay = 0, got_max_delay_2 = 0; // For exclusivity check
     int opt;
-    while ((opt = getopt(argc, argv, "c:dg:hi:I:jPqr:s:u:Vw:W:x:X:")) != -1) {
+    while ((opt = getopt(argc, argv, "c:dg:hi:I:jPqr:s:t:u:Vw:W:x:X:")) != -1) {
         switch (opt) {
             case 'c':
                 count = atoi(optarg);
@@ -226,6 +228,9 @@ void parse_args(int argc, char* argv[]) {
             case 's':
                 packet_size = atoi(optarg) + 8; // 8 byte ICMP header
                 break;
+            case 't':
+                set_ttl = atoi(optarg);
+                break;
             case 'u':
                 uniform_range = atof(optarg);
                 break;
@@ -259,7 +264,6 @@ void parse_args(int argc, char* argv[]) {
         fprintf(stderr, "The -i (interval) and -r (rate) arguments are mutually exclusive.  You must use one or the other, not both.\n");
         exit(2);
     }
-
 
     // Make sure we don't have both -P and -u arguments
     if (do_poisson && (uniform_range >= 0.0)) {
@@ -327,12 +331,22 @@ void parse_args(int argc, char* argv[]) {
             Max Delay (Limit): %f\n\
             Max Delay (Halving): %f\n\
             Socket Debug: %u\n\
+            Set TTL: %u\n\
             Uniform Range: %f\n\
             Do Poisson: %u\n",
-            target_ip, bind_ifname, count, group_size, quiet, json, lambda, packet_size, duration, timeout, max_delay, max_delay_2, sock_debug, uniform_range, do_poisson
+            target_ip, bind_ifname, count, group_size, quiet, json, lambda, packet_size, duration, timeout, max_delay, max_delay_2, sock_debug, set_ttl, uniform_range, do_poisson
         );
         exit(0);
     #endif
+}
+
+double get_sent_timestamp(unsigned short seq) {
+    // Retrieve the sending timestamp for this sequence number
+    pthread_mutex_lock(&sent_mutex);
+    double st = sent_time[seq % SEQ_TABLE_SIZE];
+    sent_time[seq % SEQ_TABLE_SIZE] = -1; // Reset value to -1 after reading in case the sequence number wraps
+    pthread_mutex_unlock(&sent_mutex);
+    return st;
 }
 
 // Listen for echo reply packets
@@ -365,50 +379,105 @@ static void* receiver_thread(void* arg) {
         if ((size_t)n < (size_t)ip_hdr_len + sizeof(struct icmphdr)) continue;
         struct icmphdr* icmp_hdr = (struct icmphdr*)(buf + ip_hdr_len);
 
-        // Ignore anything other than an echo reply
-        if (icmp_hdr->type != 0) continue;
-        if (icmp_hdr->code != 0) continue;
+        // Handle Echo Reply (Type=0, Code=0)
+        if (icmp_hdr->type == 0) {
+            if (icmp_hdr->code == 0) {
+                // Ignore packets from other PIDs
+                unsigned short id  = ntohs(icmp_hdr->un.echo.id);
+                if (id != (pid & 0xFFFF)) continue;
 
-        // Ignore packets from other PIDs
-        unsigned short id  = ntohs(icmp_hdr->un.echo.id);
-        if (id != (pid & 0xFFFF)) continue;
+                // Retrieve the sending timestamp for this sequence number
+                unsigned short seq = ntohs(icmp_hdr->un.echo.sequence);
+                double st = get_sent_timestamp(seq);
+                if (st < 0.0) continue; // No matching send timestamp found
 
-        // Retrieve the sending timestamp for this sequence number
-        unsigned short seq = ntohs(icmp_hdr->un.echo.sequence);
-        pthread_mutex_lock(&sent_mutex);
-        double st = sent_time[seq % SEQ_TABLE_SIZE];
-        sent_time[seq % SEQ_TABLE_SIZE] = -1; // Reset value to -1 after reading in case the sequence number wraps
-        pthread_mutex_unlock(&sent_mutex);
-        if (st < 0.0) continue; // No matching send timestamp found
+                // Get the source address and TTL from the reply
+                char from_str[INET_ADDRSTRLEN];
+                inet_ntop(AF_INET, &from.sin_addr, from_str, sizeof(from_str));
+                int ttl = ip_hdr->ttl;
 
-        // Get the source address and TTL from the reply
-        char from_str[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, &from.sin_addr, from_str, sizeof(from_str));
-        int ttl = ip_hdr->ttl;
+                // Compute the RTT and update statistics
+                double rtt_ms = (recv_time - st) * 1000.0;
+                atomic_fetch_add(&recv_count, 1);
+                if (rtt_min < 0.0 || rtt_ms < rtt_min) rtt_min = rtt_ms;
+                if (rtt_max < 0.0 || rtt_ms > rtt_max) rtt_max = rtt_ms;
+                rtt_sum += rtt_ms;
 
-        // Compute the RTT and update statistics
-        double rtt_ms = (recv_time - st) * 1000.0;
-        atomic_fetch_add(&recv_count, 1);
-        if (rtt_min < 0.0 || rtt_ms < rtt_min) rtt_min = rtt_ms;
-        if (rtt_max < 0.0 || rtt_ms > rtt_max) rtt_max = rtt_ms;
-        rtt_sum += rtt_ms;
+                // Print per-packet output
+                if (!quiet) {
+                    if (json) {
+                        if (seq > 1) printf(",\n");
+                        printf("\
+            {\n\
+                \"timestamp\": %ld.%06ld,\n\
+                \"bytes\": %lu,\n\
+                \"from\": \"%s\",\n\
+                \"icmp_seq\": %u,\n\
+                \"ttl\": %u,\n\
+                \"rtt\": %.3f,\n\
+                \"err\": \"\"\n\
+            }", (long)now.tv_sec, now.tv_nsec / 1000L, n-ip_hdr_len, from_str, seq, ttl, rtt_ms);
+                    } else {
+                        printf("[%ld.%06ld] %lu bytes from %s: icmp_seq=%u ttl=%u time=%.3f ms\n",
+                                (long)now.tv_sec, now.tv_nsec / 1000L, n-ip_hdr_len, from_str, seq, ttl, rtt_ms);
+                    }
+                }
+            }
+        }
+        
+        // Handle TTL Exceeded
+        else if (icmp_hdr->type == 11) {
+            if (icmp_hdr->code == 0) {
+                size_t payload_offset = ip_hdr_len + sizeof(struct icmphdr);
 
-        // Print per-packet output
-        if (!quiet) {
-            if (json) {
-                if (seq > 1) printf(",\n");
-                printf("\
-    {\n\
-        \"timestamp\": %ld.%06ld,\n\
-        \"bytes\": %lu,\n\
-        \"from\": \"%s\",\n\
-        \"icmp_seq\": %u,\n\
-        \"ttl\": %u,\n\
-        \"rtt\": %.3f\n\
-    }", (long)now.tv_sec, now.tv_nsec / 1000L, n-ip_hdr_len, from_str, seq, ttl, rtt_ms);
-            } else {
-                printf("[%ld.%06ld] %lu bytes from %s: icmp_seq=%u ttl=%u time=%.3f ms\n",
-                        (long)now.tv_sec, now.tv_nsec / 1000L, n-ip_hdr_len, from_str, seq, ttl, rtt_ms);
+                // Get embedded header from original Echo Request
+                if ((size_t)n < payload_offset + sizeof(struct iphdr)) continue;
+                struct iphdr *inner_ip = (struct iphdr *)(buf + payload_offset);
+                size_t inner_ip_len = (size_t)inner_ip->ihl * 4;
+                if (inner_ip_len < sizeof(struct iphdr)) continue;
+                if ((size_t)n < payload_offset + inner_ip_len + sizeof(struct icmphdr)) continue;
+                struct icmphdr *inner_icmp = (struct icmphdr *)(buf + payload_offset + inner_ip_len);
+
+                // Make sure the expired Echo Request was one we sent
+                if (inner_ip->protocol != IPPROTO_ICMP) continue;
+                if (inner_icmp->type != ICMP_ECHO || inner_icmp->code != 0) continue;
+
+                unsigned short id = ntohs(inner_icmp->un.echo.id);
+                unsigned short seq = ntohs(inner_icmp->un.echo.sequence);
+
+                if (id != (pid & 0xffff))
+                    continue;
+
+                // Retrieve the sending timestamp for this sequence number
+                double st = get_sent_timestamp(seq);
+                if (st < 0.0) continue; // No matching send timestamp found
+
+                // Get the source address and TTL from the reply
+                char from_str[INET_ADDRSTRLEN];
+                inet_ntop(AF_INET, &from.sin_addr, from_str, sizeof(from_str));
+                int ttl = ip_hdr->ttl;
+
+                // Compute the RTT from where TTL expired
+                double rtt_ms = (recv_time - st) * 1000.0;
+
+                // Print per-packet output
+                if (!quiet) {
+                    if (json) {
+                        if (seq > 1) printf(",\n");
+                        printf("\
+            {\n\
+                \"timestamp\": %ld.%06ld,\n\
+                \"bytes\": %lu,\n\
+                \"from\": \"%s\",\n\
+                \"icmp_seq\": %u,\n\
+                \"ttl\": %u,\n\
+                \"rtt\": %.3f,\n\
+                \"err\": \"%s\"\n\
+            }", (long)now.tv_sec, now.tv_nsec / 1000L, n-ip_hdr_len, from_str, seq, ttl, rtt_ms, "TTL Exceeded");
+                    } else {
+                        printf("From %s icmp_seq=%u Time to live exceeded after %.3f ms", from_str, seq, rtt_ms);
+                    }
+                }
             }
         }
     }
@@ -450,6 +519,14 @@ int main(int argc, char* argv[]) {
     if (bind_ifname != NULL) {
         if (setsockopt(sock, SOL_SOCKET, SO_BINDTODEVICE, bind_ifname, strlen(bind_ifname) + 1) < 0) {
             fprintf(stderr, "Failed to bind to device with name '%s'.  Make sure the interface exists and you have root priviliges.\n", bind_ifname);
+            close(sock);
+            exit(2);
+        }
+    }
+
+    if (set_ttl > 0) {
+        if (setsockopt(sock, IPPROTO_IP, IP_TTL, &set_ttl, sizeof(set_ttl)) < 0) {
+            fprintf(stderr, "Failed to set socket TTL=%u.\n", set_ttl);
             close(sock);
             exit(2);
         }

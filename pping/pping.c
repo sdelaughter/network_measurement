@@ -123,12 +123,20 @@ inline double timespec_to_nsec(const struct timespec *ts) {
     return ts->tv_sec * 1e9 + ts->tv_nsec;
 }
 
-inline char* timespec_to_str(const struct timespec *ts) {
-    char* time_str;
-    if (0 > asprintf(&time_str, "%ld.%06ld", (long)ts->tv_sec, ts->tv_nsec / 1000L)) {
-        return NULL;
-    }
-    return time_str;
+// inline char* timespec_to_str(const struct timespec *ts) {
+//     char time_str[64];
+//     snprintf(time_str, sizeof time_str, "%ld.%06ld",
+//             (long)ts->tv_sec, ts->tv_nsec / 1000L);
+//     return time_str;
+//     char* time_str;
+//     if (0 > asprintf(&time_str, "%ld.%06ld", (long)ts->tv_sec, ts->tv_nsec / 1000L)) {
+//         return NULL;
+//     }
+//     return time_str;
+// }
+
+static inline void timespec_to_str(char *buf, size_t size, const struct timespec *ts) {
+    snprintf(buf, size, "%ld.%06ld", (long)ts->tv_sec, ts->tv_nsec / 1000L);
 }
 
 inline struct timespec sec_to_timespec(double seconds) {
@@ -485,6 +493,8 @@ static void* receiver_thread(void* arg) {
 
         // Compute time since start and current timestamp
         struct timespec now = current_time();
+        char time_str[64];
+        timespec_to_str(time_str, sizeof time_str, &now);
         double recv_time = time_diff(start_ts, now);
 
         // Get the source address from the reply
@@ -533,10 +543,10 @@ static void* receiver_thread(void* arg) {
             \"ttl\": %u,\n\
             \"rtt\": %.3f,\n\
             \"err\": \"\"\n\
-        }", timespec_to_str(&now), n-ip_hdr_len, from_str, seq, ip_hdr->ttl, rtt_ms);
+        }", time_str, n-ip_hdr_len, from_str, seq, ip_hdr->ttl, rtt_ms);
                 } else {
                     printf("[%s] %lu bytes from %s: icmp_seq=%u ttl=%u time=%.3f ms\n",
-                            timespec_to_str(&now), n-ip_hdr_len, from_str, seq, ip_hdr->ttl, rtt_ms
+                            time_str, n-ip_hdr_len, from_str, seq, ip_hdr->ttl, rtt_ms
                     );
                 }
             }
@@ -579,10 +589,10 @@ static void* receiver_thread(void* arg) {
             \"ttl\": %u,\n\
             \"rtt\": %.3f,\n\
             \"err\": \"%s\"\n\
-        }", timespec_to_str(&now), n-ip_hdr_len, from_str, seq, ip_hdr->ttl, rtt_ms, "TTL Exceeded");
+        }", time_str, n-ip_hdr_len, from_str, seq, ip_hdr->ttl, rtt_ms, "TTL Exceeded");
                 } else {
                     printf("[%s] From %s icmp_seq=%u Time to live exceeded after %.3f ms\n", 
-                        timespec_to_str(&now), from_str, seq, rtt_ms
+                        time_str, from_str, seq, rtt_ms
                     );
                 }
             }

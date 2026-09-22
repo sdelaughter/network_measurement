@@ -372,6 +372,10 @@ static void* receiver_thread(void* arg) {
         struct timespec now;
         clock_gettime(CLOCK_REALTIME, &now);
 
+        // Get the source address from the reply
+        char from_str[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &from.sin_addr, from_str, sizeof(from_str));
+
         // Make sure the packet is long enough, and get header pointers
         if ((size_t)n < sizeof(struct iphdr) + sizeof(struct icmphdr)) continue;
         struct iphdr* ip_hdr = (struct iphdr* )buf;
@@ -390,11 +394,6 @@ static void* receiver_thread(void* arg) {
                 unsigned short seq = ntohs(icmp_hdr->un.echo.sequence);
                 double st = get_sent_timestamp(seq);
                 if (st < 0.0) continue; // No matching send timestamp found
-
-                // Get the source address and TTL from the reply
-                char from_str[INET_ADDRSTRLEN];
-                inet_ntop(AF_INET, &from.sin_addr, from_str, sizeof(from_str));
-                int ttl = ip_hdr->ttl;
 
                 // Compute the RTT and update statistics
                 double rtt_ms = (recv_time - st) * 1000.0;
@@ -416,10 +415,11 @@ static void* receiver_thread(void* arg) {
                 \"ttl\": %u,\n\
                 \"rtt\": %.3f,\n\
                 \"err\": \"\"\n\
-            }", (long)now.tv_sec, now.tv_nsec / 1000L, n-ip_hdr_len, from_str, seq, ttl, rtt_ms);
+            }", (long)now.tv_sec, now.tv_nsec / 1000L, n-ip_hdr_len, from_str, seq, ip_hdr->ttl, rtt_ms);
                     } else {
                         printf("[%ld.%06ld] %lu bytes from %s: icmp_seq=%u ttl=%u time=%.3f ms\n",
-                                (long)now.tv_sec, now.tv_nsec / 1000L, n-ip_hdr_len, from_str, seq, ttl, rtt_ms);
+                                (long)now.tv_sec, now.tv_nsec / 1000L, n-ip_hdr_len, from_str, seq, ip_hdr->ttl, rtt_ms
+                        );
                     }
                 }
             }
@@ -441,21 +441,14 @@ static void* receiver_thread(void* arg) {
                 // Make sure the expired Echo Request was one we sent
                 if (inner_ip->protocol != IPPROTO_ICMP) continue;
                 if (inner_icmp->type != ICMP_ECHO || inner_icmp->code != 0) continue;
-
                 unsigned short id = ntohs(inner_icmp->un.echo.id);
-                unsigned short seq = ntohs(inner_icmp->un.echo.sequence);
-
                 if (id != (pid & 0xffff))
                     continue;
 
+                unsigned short seq = ntohs(inner_icmp->un.echo.sequence);
                 // Retrieve the sending timestamp for this sequence number
                 double st = get_sent_timestamp(seq);
                 if (st < 0.0) continue; // No matching send timestamp found
-
-                // Get the source address and TTL from the reply
-                char from_str[INET_ADDRSTRLEN];
-                inet_ntop(AF_INET, &from.sin_addr, from_str, sizeof(from_str));
-                int ttl = ip_hdr->ttl;
 
                 // Compute the RTT from where TTL expired
                 double rtt_ms = (recv_time - st) * 1000.0;
@@ -473,9 +466,11 @@ static void* receiver_thread(void* arg) {
                 \"ttl\": %u,\n\
                 \"rtt\": %.3f,\n\
                 \"err\": \"%s\"\n\
-            }", (long)now.tv_sec, now.tv_nsec / 1000L, n-ip_hdr_len, from_str, seq, ttl, rtt_ms, "TTL Exceeded");
+            }", (long)now.tv_sec, now.tv_nsec / 1000L, n-ip_hdr_len, from_str, seq, ip_hdr->ttl, rtt_ms, "TTL Exceeded");
                     } else {
-                        printf("From %s icmp_seq=%u Time to live exceeded after %.3f ms", from_str, seq, rtt_ms);
+                        printf("[%ld.%06ld] From %s icmp_seq=%u Time to live exceeded after %.3f ms", 
+                            (long)now.tv_sec, now.tv_nsec / 1000L, from_str, seq, rtt_ms
+                        );
                     }
                 }
             }

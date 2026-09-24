@@ -476,26 +476,10 @@ static void* receiver_thread(void* arg) {
     char buf[1024];
     struct sockaddr_in from;
     socklen_t fromlen = sizeof(from);
-    ssize_t n;
-    char time_str[64];
-    struct timespec now;
-    double recv_time;
-    char from_str[INET_ADDRSTRLEN];
-    struct iphdr* ip_hdr;
-    struct icmphdr* icmp_hdr;
-    int ip_hdr_len;
-    unsigned short seq;
-    double st;
-    double rtt_ms;
-
-    size_t payload_offset;
-    struct iphdr* inner_ip;
-    size_t inner_ip_len;
-    struct icmphdr* inner_icmp;
 
     while (!atomic_load(&stop_receiver)) {
         // Receive a packet
-        n = recvfrom(sock, buf, sizeof(buf), 0,
+        ssize_t n = recvfrom(sock, buf, sizeof(buf), 0,
                               (struct sockaddr*)&from, &fromlen);
         if (n < 0) {
             if (errno == EINTR || errno == EWOULDBLOCK || errno == EAGAIN) continue;
@@ -504,25 +488,26 @@ static void* receiver_thread(void* arg) {
         }
 
         // Compute time since start and current timestamp
-        now = current_time();
-        
+        struct timespec now = current_time();
+        char time_str[64];
         timespec_to_str(time_str, sizeof time_str, &now);
-        recv_time = time_diff(start_ts, now);
+        double recv_time = time_diff(start_ts, now);
 
         // Get the source address from the reply
+        char from_str[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &from.sin_addr, from_str, sizeof(from_str));
 
         // Make sure the packet is long enough, and get header pointer
         if ((size_t)n < sizeof(struct iphdr) + sizeof(struct icmphdr)) continue;
-        ip_hdr = (struct iphdr* )buf;
+        struct iphdr* ip_hdr = (struct iphdr* )buf;
 
         // Make sure the packet is ICMP
         if (!packet_is_icmp(ip_hdr)) continue;
 
         // Get ICMP header pointer
-        ip_hdr_len = ip_hdr->ihl * 4;
+        int ip_hdr_len = ip_hdr->ihl * 4;
         if ((size_t)n < (size_t)ip_hdr_len + sizeof(struct icmphdr)) continue;
-        icmp_hdr = (struct icmphdr*)(buf + ip_hdr_len);
+        struct icmphdr* icmp_hdr = (struct icmphdr*)(buf + ip_hdr_len);
 
         // Handle Echo Reply (Type=0, Code=0)
         if (icmp_is_echo_reply(icmp_hdr)) {
@@ -530,12 +515,12 @@ static void* receiver_thread(void* arg) {
             if (!same_process(icmp_hdr)) continue;
 
             // Retrieve the sending timestamp for this sequence number
-            seq = ntohs(icmp_hdr->un.echo.sequence);
-            st = get_sent_timestamp(seq);
+            unsigned short seq = ntohs(icmp_hdr->un.echo.sequence);
+            double st = get_sent_timestamp(seq);
             if (st < 0.0) continue; // No matching send timestamp found
 
             // Compute the RTT and update statistics
-            rtt_ms = (recv_time - st) * 1000.0;
+            double rtt_ms = (recv_time - st) * 1000.0;
             atomic_fetch_add(&recv_count, 1);
             if (rtt_min < 0.0 || rtt_ms < rtt_min) rtt_min = rtt_ms;
             if (rtt_max < 0.0 || rtt_ms > rtt_max) rtt_max = rtt_ms;
@@ -566,26 +551,26 @@ static void* receiver_thread(void* arg) {
         // Handle TTL Exceeded (Type=11, Code=0)
         else if (icmp_is_ttl_exceeded(icmp_hdr)) {
             // Get embedded header from original Echo Request
-            payload_offset = ip_hdr_len + sizeof(struct icmphdr);
+            size_t payload_offset = ip_hdr_len + sizeof(struct icmphdr);
             if ((size_t)n < payload_offset + sizeof(struct iphdr)) continue;
-            inner_ip = (struct iphdr *)(buf + payload_offset);
+            struct iphdr *inner_ip = (struct iphdr *)(buf + payload_offset);
             if (!packet_is_icmp(inner_ip)) continue;
-            inner_ip_len = (size_t)inner_ip->ihl * 4;
+            size_t inner_ip_len = (size_t)inner_ip->ihl * 4;
             if (inner_ip_len < sizeof(struct iphdr)) continue;
             if ((size_t)n < payload_offset + inner_ip_len + sizeof(struct icmphdr)) continue;
-            inner_icmp = (struct icmphdr *)(buf + payload_offset + inner_ip_len);
+            struct icmphdr *inner_icmp = (struct icmphdr *)(buf + payload_offset + inner_ip_len);
             if (!icmp_is_echo_request(inner_icmp)) continue;
 
             // Make sure the expired Echo Request was one we sent
             if (!same_process(inner_icmp)) continue;
 
             // Get the sequence number for the expired Echo Request and retrieve its sending timestamp
-            seq = ntohs(inner_icmp->un.echo.sequence);
-            st = get_sent_timestamp(seq);
+            unsigned short seq = ntohs(inner_icmp->un.echo.sequence);
+            double st = get_sent_timestamp(seq);
             if (st < 0.0) continue; // No matching send timestamp found
 
             // Compute the RTT from where TTL expired
-            rtt_ms = (recv_time - st) * 1000.0;
+            double rtt_ms = (recv_time - st) * 1000.0;
 
             // Print per-packet output
             if (!quiet) {
@@ -683,8 +668,6 @@ int main(int argc, char* argv[]) {
     double send_ts;
     int seq = 1;
     struct timespec delay_ts;
-    ssize_t sent;
-    double int_ms;
 
     
     if (json) printf("[\n");
@@ -705,7 +688,7 @@ int main(int argc, char* argv[]) {
             pthread_mutex_unlock(&sent_mutex);
 
             // Send packet
-            sent = sendto(sock, packet, sizeof(packet), 0,
+            ssize_t sent = sendto(sock, packet, sizeof(packet), 0,
                                     (struct sockaddr*)&addr, sizeof(addr));
             if (sent < 0) perror("sendto");
             else atomic_fetch_add(&sent_count, 1);
@@ -733,7 +716,7 @@ int main(int argc, char* argv[]) {
 
             if ((elapsed < duration || duration < 0) && (lambda > 0)){
                 // Update interval statistics
-                int_ms = timespec_to_msec(&delay_ts);
+                double int_ms = timespec_to_msec(&delay_ts);
                 if (int_min < 0.0 || int_ms < int_min) int_min = int_ms;
                 if (int_max < 0.0 || int_ms > int_max) int_max = int_ms;
                 int_sum += int_ms;

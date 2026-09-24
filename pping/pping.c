@@ -165,10 +165,8 @@ inline struct timespec nsec_to_timespec(int64_t nsec) {
 }
 
 // Get the current time
-inline struct timespec current_time() {
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    return ts;
+inline void current_time(struct timespec* ts) {
+    clock_gettime(CLOCK_REALTIME, ts);
 }
 
 // Compute the difference between two timespecs in seconds
@@ -178,7 +176,9 @@ inline double time_diff(struct timespec start, struct timespec stop) {
 
 // Compute the amount of time elapsed since the program started
 static inline double now_elapsed(void) {
-    return time_diff(start_ts, current_time());
+    struct timespec now;
+    current_time(&now);
+    return time_diff(start_ts, now);
 }
 #pragma endregion Time_Helpers
 
@@ -287,6 +287,11 @@ static void fixed_delay(struct timespec* ts, double lambda) {
     double seconds = 1.0/lambda;
     ts->tv_sec = (time_t)seconds;
     ts->tv_nsec = (long)((seconds - ts->tv_sec) * 1e9);
+}
+
+static void zero_delay(struct timespec* ts) {
+    ts->tv_sec = (time_t)0;
+    ts->tv_nsec = (long)0;
 }
 
 #pragma endregion Delay_Functions
@@ -474,11 +479,11 @@ void parse_args(int argc, char* argv[]) {
 static void* receiver_thread(void* arg) {
     (void)arg;
     char buf[1024];
-    struct sockaddr_in from;
-    socklen_t fromlen = sizeof(from);
 
     while (!atomic_load(&stop_receiver)) {
         // Receive a packet
+        struct sockaddr_in from;
+        socklen_t fromlen = sizeof(from);
         ssize_t n = recvfrom(sock, buf, sizeof(buf), 0,
                               (struct sockaddr*)&from, &fromlen);
         if (n < 0) {
@@ -488,7 +493,8 @@ static void* receiver_thread(void* arg) {
         }
 
         // Compute time since start and current timestamp
-        struct timespec now = current_time();
+        struct timespec now;
+        current_time(&now);
         char time_str[64];
         timespec_to_str(time_str, sizeof time_str, &now);
         double recv_time = time_diff(start_ts, now);
@@ -663,12 +669,9 @@ int main(int argc, char* argv[]) {
         packet[i] = (char)(i & 0xFF);
     }
 
-    clock_gettime(CLOCK_REALTIME, &start_ts);
+    current_time(&start_ts);
     double elapsed = 0.0;
-    double send_ts;
     int seq = 1;
-    struct timespec delay_ts;
-
     
     if (json) printf("[\n");
     else printf("PPING %s (%s) %u(%u) bytes of data.\n", target_ip, target_ip, packet_size-8, packet_size+20);
@@ -682,7 +685,7 @@ int main(int argc, char* argv[]) {
             icmph->checksum = checksum((unsigned short*)packet, sizeof(packet));
 
             // Compute timestamp relative to start time and store it for later
-            send_ts = now_elapsed();
+            double send_ts = now_elapsed();
             pthread_mutex_lock(&sent_mutex);
             sent_time[seq % SEQ_TABLE_SIZE] = send_ts;
             pthread_mutex_unlock(&sent_mutex);
@@ -700,6 +703,7 @@ int main(int argc, char* argv[]) {
             }
         }
         if ((seq <= count || count < 0) && !atomic_load(&stop_sender)) {
+            struct timespec delay_ts;
             if (lambda > 0) {
                 if (do_poisson) {
                     poisson_delay(&delay_ts, lambda);
@@ -710,7 +714,7 @@ int main(int argc, char* argv[]) {
                 }
                 nanosleep(&delay_ts, NULL);
             } else {
-                // No delay
+                zero_delay(&delay_ts);
             }
             elapsed = now_elapsed();
 

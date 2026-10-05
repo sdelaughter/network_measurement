@@ -628,7 +628,7 @@ int main(int argc, char* argv[]) {
 
     // Get process ID
     pid = getpid();
-    printf("PID: %u\n", pid);
+    // printf("PID: %u\n", pid);
 
     // Prepare to handle interrupts
     start_interrupt_handler();
@@ -692,22 +692,23 @@ int main(int argc, char* argv[]) {
     if (json){
         printf("{\n\
     \"args\": {\n\
-        \"target_ip\": %s\n\
-        \"interface\": %s\n\
-        \"count\": %d\n\
-        \"group_size\": %u\n\
-        \"quiet\": %u\n\
-        \"json\": %u\n\
-        \"lambda\": %f\n\
-        \"size\": %u\n\
-        \"duration\": %f\n\
-        \"timeout\": %f\n\
-        \"max_delay_limit\": %f\n\
-        \"max_delay_halving\": %f\n\
-        \"socket_debug\": %u\n\
-        \"set_ttl\": %u\n\
-        \"uniform_range\": %f\n\
+        \"target_ip\": \"%s\",\n\
+        \"interface\": \"%s\",\n\
+        \"count\": %d,\n\
+        \"group_size\": %u,\n\
+        \"quiet\": %u,\n\
+        \"json\": %u,\n\
+        \"lambda\": %f,\n\
+        \"size\": %u,\n\
+        \"duration\": %f,\n\
+        \"timeout\": %f,\n\
+        \"max_delay_limit\": %f,\n\
+        \"max_delay_halving\": %f,\n\
+        \"socket_debug\": %u,\n\
+        \"set_ttl\": %u,\n\
+        \"uniform_range\": %f,\n\
         \"do_poisson\": %u\n\
+    },\n\
     \"data\": [\n",
                 target_ip, bind_ifname, count, group_size, quiet, json, lambda, packet_size, duration, timeout, max_delay, max_delay_2, sock_debug, set_ttl, uniform_range, do_poisson
             );

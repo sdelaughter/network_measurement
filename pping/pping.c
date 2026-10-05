@@ -330,15 +330,15 @@ static inline int same_process(const struct icmphdr* icmph) {
 static void print_packet_json(const struct timespec* now, unsigned long bytes, char* from_str, int seq, int ttl, double rtt_ms, char* error) {
     if (seq > 1) printf(",\n");
     printf("\
-{\n\
-    \"timestamp\": %ld.%06ld,\n\
-    \"bytes\": %lu,\n\
-    \"from\": \"%s\",\n\
-    \"icmp_seq\": %u,\n\
-    \"ttl\": %u,\n\
-    \"rtt\": %.3f,\n\
-    \"err\": \"%s\"\n\
-}", (long)now->tv_sec, now->tv_nsec / 1000L, bytes, from_str, seq, ttl, rtt_ms, error);
+        {\n\
+            \"timestamp\": %ld.%06ld,\n\
+            \"bytes\": %lu,\n\
+            \"from\": \"%s\",\n\
+            \"icmp_seq\": %u,\n\
+            \"ttl\": %u,\n\
+            \"rtt\": %.3f,\n\
+            \"err\": \"%s\"\n\
+        }", (long)now->tv_sec, now->tv_nsec / 1000L, bytes, from_str, seq, ttl, rtt_ms, error);
 }
 
 static void print_packet_info(const struct timespec* now, unsigned long bytes, char* from_str, int seq, int ttl, double rtt_ms, int type) {
@@ -628,6 +628,7 @@ int main(int argc, char* argv[]) {
 
     // Get process ID
     pid = getpid();
+    printf("PID: %u\n", pid);
 
     // Prepare to handle interrupts
     start_interrupt_handler();
@@ -688,8 +689,29 @@ int main(int argc, char* argv[]) {
         packet[i] = (char)(i & 0xFF);
     }
     
-    if (json) printf("[\n");
-    else printf("PPING %s (%s) %u(%u) bytes of data.\n", target_ip, target_ip, packet_size-8, packet_size+20);
+    if (json){
+        printf("{\n\
+    \"args\": {\n\
+        \"target_ip\": %s\n\
+        \"interface\": %s\n\
+        \"count\": %d\n\
+        \"group_size\": %u\n\
+        \"quiet\": %u\n\
+        \"json\": %u\n\
+        \"lambda\": %f\n\
+        \"size\": %u\n\
+        \"duration\": %f\n\
+        \"timeout\": %f\n\
+        \"max_delay_limit\": %f\n\
+        \"max_delay_halving\": %f\n\
+        \"socket_debug\": %u\n\
+        \"set_ttl\": %u\n\
+        \"uniform_range\": %f\n\
+        \"do_poisson\": %u\n\
+    \"data\": [\n",
+                target_ip, bind_ifname, count, group_size, quiet, json, lambda, packet_size, duration, timeout, max_delay, max_delay_2, sock_debug, set_ttl, uniform_range, do_poisson
+            );
+    } else printf("PPING %s (%s) %u(%u) bytes of data.\n", target_ip, target_ip, packet_size-8, packet_size+20);
 
     current_time(&start_ts);
     if (offset_seconds >= 0.0) {
@@ -709,8 +731,8 @@ int main(int argc, char* argv[]) {
             icmph->checksum = checksum((unsigned short*)packet, sizeof(packet));
 
             // Compute timestamp relative to start time and store it for later
-            double send_ts = now_elapsed();
-            set_sent_timestamp(seq, send_ts);
+            elapsed = now_elapsed();
+            set_sent_timestamp(seq, elapsed);
 
             // Send packet
             ssize_t sent = sendto(sock, packet, sizeof(packet), 0,
@@ -725,6 +747,7 @@ int main(int argc, char* argv[]) {
             }
         }
         if ((seq <= count || count < 0) && !atomic_load(&stop_sender)) {
+            // elapsed = now_elapsed();
             struct timespec delay_ts;
             if (offset_seconds >= 0.0) {
                 offset_delay(&delay_ts, offset_seconds);
@@ -741,8 +764,7 @@ int main(int argc, char* argv[]) {
             } else {
                 zero_delay(&delay_ts);
             }
-            elapsed = now_elapsed();
-
+            
             if ((elapsed < duration || duration < 0) && (lambda > 0)){
                 // Update interval statistics
                 double int_ms = timespec_to_msec(&delay_ts);
@@ -763,7 +785,7 @@ int main(int argc, char* argv[]) {
     int n_recv = atomic_load(&recv_count);
 
     if (json) {
-        printf("\n]\n");
+        printf("\n    ]\n}\n");
     } else {    
         double loss_pct = 0.0;
         if (n_sent > 0) {

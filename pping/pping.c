@@ -327,35 +327,36 @@ static inline int same_process(const struct icmphdr* icmph) {
     return (id == (pid & 0xFFFF));
 }
 
-static void print_packet_json(const struct timespec* now, unsigned long bytes, char* from_str, int seq, int ttl, double rtt_ms, char* error) {
+static void print_packet_json(const struct timespec* now, const struct timespec* sent_ts, unsigned long bytes, char* from_str, int seq, int ttl, double rtt_ms, char* error) {
     if (seq > 1) printf(",\n");
     printf("\
         {\n\
-            \"timestamp\": %ld.%06ld,\n\
+            \"timestamp\": %ld.%09ld,\n\
+            \"timestamp_sent\": %ld.%09ld,\n\
             \"bytes\": %lu,\n\
             \"from\": \"%s\",\n\
             \"icmp_seq\": %u,\n\
             \"ttl\": %u,\n\
-            \"rtt\": %.3f,\n\
+            \"rtt\": %.6f,\n\
             \"err\": \"%s\"\n\
-        }", (long)now->tv_sec, now->tv_nsec / 1000L, bytes, from_str, seq, ttl, rtt_ms, error);
+        }", (long)now->tv_sec, now->tv_nsec / 1000L, (long)sent_ts->tv_sec, sent_ts->tv_nsec / 1000L, bytes, from_str, seq, ttl, rtt_ms, error);
 }
 
-static void print_packet_info(const struct timespec* now, unsigned long bytes, char* from_str, int seq, int ttl, double rtt_ms, int type) {
+static void print_packet_info(const struct timespec* now, const struct timespec* sent_ts, unsigned long bytes, char* from_str, int seq, int ttl, double rtt_ms, int type) {
     if (quiet) return;
     if (type == ICMP_TYPE_ECHO_REPLY) {
         if (json) {
-            print_packet_json(now, bytes, from_str, seq, ttl, rtt_ms, "");
+            print_packet_json(now, sent_ts, bytes, from_str, seq, ttl, rtt_ms, "");
         } else {
-            printf("[%ld.%06ld] %lu bytes from %s: icmp_seq=%u ttl=%u time=%.3f ms\n",
+            printf("[%ld.%09ld] %lu bytes from %s: icmp_seq=%u ttl=%u time=%.6f ms\n",
                     (long)now->tv_sec, now->tv_nsec / 1000L, bytes, from_str, seq, ttl, rtt_ms
             );
         }
     } else if (type == ICMP_TYPE_TTL_EXCEEDED) {
         if (json) {
-            print_packet_json(now, bytes, from_str, seq, ttl, rtt_ms, "TTL Exceeded");
+            print_packet_json(now, sent_ts, bytes, from_str, seq, ttl, rtt_ms, "TTL Exceeded");
         } else {
-            printf("[%ld.%06ld] From %s icmp_seq=%u Time to live exceeded after %.3f ms\n", 
+            printf("[%ld.%09ld] From %s icmp_seq=%u Time to live exceeded after %.6f ms\n", 
                 (long)now->tv_sec, now->tv_nsec / 1000L, from_str, seq, rtt_ms
             );
         }
@@ -552,7 +553,7 @@ static void* receiver_thread(void* arg) {
         // Compute time since start and current timestamp
         struct timespec now;
         current_time(&now);
-        double recv_time = time_diff(start_ts, now);
+        // double recv_time = time_diff(start_ts, now);
 
         // Get the source address from the reply
         char from_str[INET_ADDRSTRLEN];
@@ -579,16 +580,17 @@ static void* receiver_thread(void* arg) {
             unsigned short seq = ntohs(icmph->un.echo.sequence);
             double st = get_sent_timestamp(seq);
             if (st < 0.0) continue; // No matching send timestamp found
+            struct timespec sent_ts = sec_to_timespec(st);
 
             // Compute the RTT and update statistics
-            double rtt_ms = (recv_time - st) * 1000.0;
+            double rtt_ms = time_diff(sent_ts, now) * 1000.0;
             atomic_fetch_add(&recv_count, 1);
             if (rtt_min < 0.0 || rtt_ms < rtt_min) rtt_min = rtt_ms;
             if (rtt_max < 0.0 || rtt_ms > rtt_max) rtt_max = rtt_ms;
             rtt_sum += rtt_ms;
 
             // Print per-packet output
-            print_packet_info(&now, n-ip_hdr_len, from_str, seq, ip_hdr->ttl, rtt_ms, ICMP_TYPE_ECHO_REPLY);
+            print_packet_info(&now, &sent_ts, n-ip_hdr_len, from_str, seq, ip_hdr->ttl, rtt_ms, ICMP_TYPE_ECHO_REPLY);
         }
         
         // Handle TTL Exceeded (Type=11, Code=0)
@@ -611,12 +613,13 @@ static void* receiver_thread(void* arg) {
             unsigned short seq = ntohs(inner_icmp->un.echo.sequence);
             double st = get_sent_timestamp(seq);
             if (st < 0.0) continue; // No matching send timestamp found
+            struct timespec sent_ts = sec_to_timespec(st);
 
             // Compute the RTT from where TTL expired
-            double rtt_ms = (recv_time - st) * 1000.0;
+            double rtt_ms = time_diff(sent_ts, now) * 1000.0;
 
             // Print per-packet output
-            print_packet_info(&now, n-ip_hdr_len, from_str, seq, ip_hdr->ttl, rtt_ms, ICMP_TYPE_TTL_EXCEEDED);
+            print_packet_info(&now, &sent_ts, n-ip_hdr_len, from_str, seq, ip_hdr->ttl, rtt_ms, ICMP_TYPE_TTL_EXCEEDED);
         }
     }
     return NULL;
@@ -732,8 +735,10 @@ int main(int argc, char* argv[]) {
             icmph->checksum = checksum((unsigned short*)packet, sizeof(packet));
 
             // Compute timestamp relative to start time and store it for later
-            elapsed = now_elapsed();
-            set_sent_timestamp(seq, elapsed);
+            struct timespec now;
+            current_time(&now);
+            elapsed = time_diff(start_ts, now);
+            set_sent_timestamp(seq, timespec_to_sec(&now));
 
             // Send packet
             ssize_t sent = sendto(sock, packet, sizeof(packet), 0,

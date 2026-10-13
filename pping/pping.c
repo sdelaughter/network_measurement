@@ -86,7 +86,7 @@ static double   max_delay   = -1;
 static double   max_delay_2 = -1;
 static int      sock_debug  = 0;
 static int      do_poisson = 0;
-static double   uniform_range = -1.0;
+static double   uniform_range = 0.0;
 static int      group_size = 1;
 static int      set_ttl = -1;
 static double   offset_seconds = -1.0;
@@ -454,18 +454,18 @@ void parse_args(int argc, char* argv[]) {
     }
 
     // Make sure we don't have both -P and -u arguments
-    if (do_poisson && (uniform_range >= 0.0)) {
+    if (do_poisson && (uniform_range > 0.0)) {
         fprintf(stderr, "The -P (Poisson) and -u (Uniform Range) arguments are mutually exclusive.  You must use one or the other, not both.\n");
         exit(2);
     }
 
     // Make sure we don't have a uniform distribution range that allows for negative delays
-    if ((uniform_range >= 0.0) && ((1.0/lambda - uniform_range/2.0) < 0)) {
+    if ((uniform_range > 0.0) && ((1.0/lambda - uniform_range/2.0) < 0)) {
         fprintf(stderr, "The range of uniform distribution must not allow negative delay intervals.  Set a higher target interval or a lower uniform range.\n");
         exit(2);
     }
 
-    if ((offset_seconds >= 0) && ((uniform_range >= 0.0) || do_poisson || got_interval_arg || got_rate_arg)) {
+    if ((offset_seconds >= 0) && ((uniform_range > 0.0) || do_poisson || got_interval_arg || got_rate_arg)) {
         fprintf(stderr, "The -o (offset) argument cannot be used alongside the -u (uniform), -P (Poisson), -i (interval), or -r (rate) arguments.\n");
         exit(2);
     }
@@ -761,7 +761,7 @@ int main(int argc, char* argv[]) {
             } else if (lambda > 0) {
                 if (do_poisson) {
                     poisson_delay(&delay_ts, lambda);
-                } else if (uniform_range >= 0.0) {
+                } else if (uniform_range > 0.0) {
                     uniform_delay(&delay_ts, lambda, uniform_range);
                 } else {
                     fixed_delay(&delay_ts, lambda);

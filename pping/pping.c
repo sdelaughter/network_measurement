@@ -33,7 +33,7 @@ gcc -O2 -Wall -o pping pping.c -lm
 
 #define SEQ_TABLE_SIZE  65536   // Max number of sequence/timestamp mappings to store before wrapping
 #define DRY_RUN 0               // Print argument values and exit, for debugging purposes
-#define VERSION "0.1"
+#define VERSION "0.2"
 
 #define ICMP_TYPE_ECHO_REQUEST 8
 #define ICMP_TYPE_ECHO_REPLY 0
@@ -339,7 +339,7 @@ static void print_packet_json(const struct timespec* now, const struct timespec*
             \"ttl\": %u,\n\
             \"rtt\": %.6f,\n\
             \"err\": \"%s\"\n\
-        }", (long)now->tv_sec, now->tv_nsec / 1000L, (long)sent_ts->tv_sec, sent_ts->tv_nsec / 1000L, bytes, from_str, seq, ttl, rtt_ms, error);
+        }", (long)now->tv_sec, now->tv_nsec, (long)sent_ts->tv_sec, sent_ts->tv_nsec, bytes, from_str, seq, ttl, rtt_ms, error);
 }
 
 static void print_packet_info(const struct timespec* now, const struct timespec* sent_ts, unsigned long bytes, char* from_str, int seq, int ttl, double rtt_ms, int type) {
@@ -349,7 +349,7 @@ static void print_packet_info(const struct timespec* now, const struct timespec*
             print_packet_json(now, sent_ts, bytes, from_str, seq, ttl, rtt_ms, "");
         } else {
             printf("[%ld.%09ld] %lu bytes from %s: icmp_seq=%u ttl=%u time=%.6f ms\n",
-                    (long)now->tv_sec, now->tv_nsec / 1000L, bytes, from_str, seq, ttl, rtt_ms
+                    (long)now->tv_sec, now->tv_nsec, bytes, from_str, seq, ttl, rtt_ms
             );
         }
     } else if (type == ICMP_TYPE_TTL_EXCEEDED) {
@@ -357,7 +357,7 @@ static void print_packet_info(const struct timespec* now, const struct timespec*
             print_packet_json(now, sent_ts, bytes, from_str, seq, ttl, rtt_ms, "TTL Exceeded");
         } else {
             printf("[%ld.%09ld] From %s icmp_seq=%u Time to live exceeded after %.6f ms\n", 
-                (long)now->tv_sec, now->tv_nsec / 1000L, from_str, seq, rtt_ms
+                (long)now->tv_sec, now->tv_nsec, from_str, seq, rtt_ms
             );
         }
     }
